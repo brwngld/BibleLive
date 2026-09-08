@@ -1,0 +1,33 @@
+# ---- Dependencies / toolchain caches ----
+node_modules/
+
+# ---- Build outputs ----
+dist/
+src-tauri/target/
+src-tauri/gen/schemas/
+src-tauri/whisper-build/
+
+# ---- Distribution packages & models (huge; rebuild locally instead) ----
+release/
+*.zip
+resources/models/
+*.bin
+
+# ---- Local app data (lives in %APPDATA% if ever created here) ----
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+crash.log
+panic.log
+diagnostics-report.txt
+
+# ---- Manual build intermediates (final PDF at repo root IS tracked) ----
+docs/manual_build/*.pdf
+docs/manual_build/*.png
+
+# ---- Editor / OS / session junk ----
+.DS_Store
+Thumbs.db
+.video_agent/
+.zcode/

@@ -1,0 +1,10 @@
+# Locate the VS-bundled CMake so whisper.cpp (via whisper-rs) can build, and
+# libclang for bindgen. cc/cmake crates and VS generators resolve cl.exe themselves.
+[env]
+CMAKE = "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe"
+LIBCLANG_PATH = "C:/Program Files/LLVM/bin"
+
+# Fully static CRT: the release exe runs on any Windows 10+ 64-bit PC with
+# no Visual C++ redistributable installed.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

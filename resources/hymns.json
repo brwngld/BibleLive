@@ -1,0 +1,122 @@
+{
+  "items": [
+    {
+      "title": "Amazing Grace",
+      "language": "en",
+      "license": "public-domain",
+      "metadata": { "author": "John Newton", "year": 1779, "topics": ["grace", "salvation"] },
+      "sections": [
+        { "label": "Verse 1", "lines": ["Amazing grace! How sweet the sound", "That saved a wretch like me!", "I once was lost, but now am found;", "Was blind, but now I see."] },
+        { "label": "Verse 2", "lines": ["'Twas grace that taught my heart to fear,", "And grace my fears relieved;", "How precious did that grace appear", "The hour I first believed."] },
+        { "label": "Verse 3", "lines": ["Through many dangers, toils and snares,", "I have already come;", "'Tis grace hath brought me safe thus far,", "And grace will lead me home."] }
+      ]
+    },
+    {
+      "title": "Rock of Ages",
+      "language": "en",
+      "license": "public-domain",
+      "metadata": { "author": "Augustus Toplady", "year": 1763, "topics": ["refuge", "salvation"] },
+      "sections": [
+        { "label": "Verse 1", "lines": ["Rock of Ages, cleft for me,", "Let me hide myself in Thee;", "Let the water and the blood,", "From Thy wounded side which flowed,", "Be of sin the double cure,", "Save from wrath and make me pure."] },
+        { "label": "Verse 2", "lines": ["Not the labor of my hands", "Can fulfill Thy law's demands;", "Could my zeal no respite know,", "Could my tears forever flow,", "All for sin could not atone;", "Thou must save, and Thou alone."] }
+      ]
+    },
+    {
+      "title": "Blessed Assurance",
+      "language": "en",
+      "license": "public-domain",
+      "metadata": { "author": "Fanny J. Crosby", "year": 1873, "topics": ["assurance", "salvation"] },
+      "sections": [
+        { "label": "Verse 1", "lines": ["Blessed assurance, Jesus is mine!", "O what a foretaste of glory divine!", "Heir of salvation, purchase of God,", "Born of His Spirit, washed in His blood."] },
+        { "label": "Chorus", "lines": ["This is my story, this is my song,", "Praising my Savior all the day long;", "This is my story, this is my song,", "Praising my Savior all the day long."] }
+      ]
+    },
+    {
+      "title": "It Is Well with My Soul",
+      "language": "en",
+      "license": "public-domain",
+      "metadata": { "author": "Horatio G. Spafford", "year": 1873, "topics": ["peace", "comfort"] },
+      "sections": [
+        { "label": "Verse 1", "lines": ["When peace like a river, attendeth my way,", "When sorrows like sea billows roll;", "Whatever my lot, Thou hast taught me to say,", "It is well, it is well, with my soul."] },
+        { "label": "Chorus", "lines": ["It is well with my soul,", "It is well, it is well with my soul."] }
+      ]
+    },
+    {
+      "title": "Great Is Thy Faithfulness",
+      "language": "en",
+      "license": "public-domain",
+      "metadata": { "author": "Thomas O. Chisholm", "year": 1923, "topics": ["faithfulness", "mercy"] },
+      "sections": [
+        { "label": "Verse 1", "lines": ["Great is Thy faithfulness, O God my Father;", "There is no shadow of turning with Thee;", "Thou changest not, Thy compassions, they fail not;", "As Thou hast been, Thou forever wilt be."] },
+        { "label": "Chorus", "lines": ["Great is Thy faithfulness! Great is Thy faithfulness!", "Morning by morning new mercies I see;", "All I have needed Thy hand hath provided;", "Great is Thy faithfulness, Lord, unto me!"] }
+      ]
+    },
+    {
+      "title": "Holy, Holy, Holy!",
+      "language": "en",
+      "license": "public-domain",
+      "metadata": { "author": "Reginald Heber", "year": 1826, "topics": ["worship", "trinity"] },
+      "sections": [
+        { "label": "Verse 1", "lines": ["Holy, holy, holy! Lord God Almighty!", "Early in the morning our song shall rise to Thee;", "Holy, holy, holy, merciful and mighty!", "God in three Persons, blessed Trinity!"] },
+        { "label": "Verse 2", "lines": ["Holy, holy, holy! All the saints adore Thee,", "Casting down their golden crowns around the glassy sea;", "Cherubim and seraphim falling down before Thee,", "Who wert, and art, and evermore shalt be."] }
+      ]
+    },
+    {
+      "title": "What a Friend We Have in Jesus",
+      "language": "en",
+      "license": "public-domain",
+      "metadata": { "author": "Joseph M. Scriven", "year": 1855, "topics": ["prayer", "friendship"] },
+      "sections": [
+        { "label": "Verse 1", "lines": ["What a Friend we have in Jesus,", "All our sins and griefs to bear!", "What a privilege to carry", "Everything to God in prayer!", "O what peace we often forfeit,", "O what needless pain we bear,", "All because we do not carry", "Everything to God in prayer."] },
+        { "label": "Verse 2", "lines": ["Have we trials and temptations?", "Is there trouble anywhere?", "We should never be discouraged;", "Take it to the Lord in prayer.", "Can we find a friend so faithful", "Who will all our sorrows share?", "Jesus knows our every weakness;", "Take it to the Lord in prayer."] }
+      ]
+    },
+    {
+      "title": "How Firm a Foundation",
+      "language": "en",
+      "license": "public-domain",
+      "metadata": { "author": "Anonymous", "year": 1787, "topics": ["faith", "scripture"] },
+      "sections": [
+        { "label": "Verse 1", "lines": ["How firm a foundation, ye saints of the Lord,", "Is laid for your faith in His excellent Word!", "What more can He say than to you He hath said,", "To you who for refuge to Jesus have fled?"] }
+      ]
+    },
+    {
+      "title": "Praise God from Whom All Blessings Flow",
+      "language": "en",
+      "license": "public-domain",
+      "metadata": { "author": "Thomas Ken", "year": 1674, "topics": ["praise", "doxology"] },
+      "sections": [
+        { "label": "Doxology", "lines": ["Praise God, from whom all blessings flow;", "Praise Him, all creatures here below;", "Praise Him above, ye heavenly host;", "Praise Father, Son, and Holy Ghost."] }
+      ]
+    },
+    {
+      "title": "Jesus Loves Me",
+      "language": "en",
+      "license": "public-domain",
+      "metadata": { "author": "Anna B. Warner", "year": 1860, "topics": ["children", "love"] },
+      "sections": [
+        { "label": "Verse 1", "lines": ["Jesus loves me—this I know,", "For the Bible tells me so;", "Little ones to Him belong;", "They are weak, but He is strong."] },
+        { "label": "Chorus", "lines": ["Yes, Jesus loves me!", "Yes, Jesus loves me!", "Yes, Jesus loves me!", "The Bible tells me so."] }
+      ]
+    },
+    {
+      "title": "To God Be the Glory",
+      "language": "en",
+      "license": "public-domain",
+      "metadata": { "author": "Fanny J. Crosby", "year": 1875, "topics": ["praise", "salvation"] },
+      "sections": [
+        { "label": "Verse 1", "lines": ["To God be the glory, great things He hath done;", "So loved He the world that He gave us His Son,", "Who yielded His life an atonement for sin,", "And opened the life-gate that all may go in."] },
+        { "label": "Chorus", "lines": ["Praise the Lord, praise the Lord,", "Let the earth hear His voice!", "Praise the Lord, praise the Lord,", "Let the people rejoice!", "O come to the Father through Jesus the Son,", "And give Him the glory, great things He hath done."] }
+      ]
+    },
+    {
+      "title": "All Hail the Power of Jesus' Name",
+      "language": "en",
+      "license": "public-domain",
+      "metadata": { "author": "Edward Perronet", "year": 1779, "topics": ["praise", "king"] },
+      "sections": [
+        { "label": "Verse 1", "lines": ["All hail the power of Jesus' Name!", "Let angels prostrate fall;", "Bring forth the royal diadem,", "And crown Him Lord of all."] }
+      ]
+    }
+  ]
+}

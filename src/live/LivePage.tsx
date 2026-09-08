@@ -1,0 +1,359 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { serviceApi, type SessionItemRow, type SessionMeta } from "./api";
+import { voiceApi, onSuggestion, type Suggestion } from "../voice/api";
+import { displayApi, onDisplayUpdate, type SlotView } from "../display/api";
+
+/**
+ * LIVE SERVICE — the operator's control room.
+ * Session timer, audio + AI status, display strip, emergency controls, and
+ * the auto-recorded service log.
+ */
+export default function LivePage() {
+  // session
+  const [session, setSession] = useState<SessionMeta | null>(null);
+  const [nameInput, setNameInput] = useState("");
+  const [elapsed, setElapsed] = useState("00:00");
+  const [history, setHistory] = useState<SessionMeta[]>([]);
+  const [log, setLog] = useState<SessionItemRow[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
+
+  // live status
+  const [listening, setListening] = useState(false);
+  const [mode, setMode] = useState("assisted");
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [slots, setSlots] = useState<SlotView[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  const logRef = useRef<HTMLDivElement>(null);
+  const sessionRef = useRef<SessionMeta | null>(null);
+  sessionRef.current = session;
+
+  const refreshSlots = useCallback(() => {
+    displayApi.slots().then(setSlots).catch(() => {});
+  }, []);
+
+  const refreshHistory = useCallback(() => {
+    serviceApi.list().then(setHistory).catch(() => {});
+  }, []);
+
+  const refreshLog = useCallback(() => {
+    const s = sessionRef.current;
+    if (s) serviceApi.items(s.id).then(setLog).catch(() => {});
+  }, []);
+
+  // initial load + event subscriptions
+  useEffect(() => {
+    serviceApi.current().then(setSession).catch(() => {});
+    refreshHistory();
+    refreshSlots();
+    voiceApi.listeningStatus().then(setListening).catch(() => {});
+    voiceApi.getMode().then(setMode).catch(() => {});
+    voiceApi.suggestions().then(setSuggestions).catch(() => {});
+
+    let uns: Promise<UnlistenFnLike>[] = [];
+    uns.push(
+      onSuggestion((e) =>
+        setSuggestions((prev) => [e.suggestion, ...prev.filter((p) => p.id !== e.suggestion.id)].slice(0, 10)),
+      ),
+    );
+    uns.push(onDisplayUpdate(() => refreshSlots()));
+    Promise.all(uns).then((fns) => {
+      unref.current = fns;
+    });
+    const unref = { current: [] as (() => void)[] };
+    return () => {
+      unref.current.forEach((f) => f());
+    };
+  }, [refreshSlots, refreshHistory]);
+
+  // log refresh when session changes
+  useEffect(() => {
+    refreshLog();
+  }, [session, refreshLog]);
+
+  // timer
+  useEffect(() => {
+    if (!session) {
+      setElapsed("00:00");
+      return;
+    }
+    const tick = () => {
+      const start = new Date(session.startedAt || Date.now()).getTime();
+      const secs = Math.max(0, Math.floor((Date.now() - start) / 1000));
+      const h = Math.floor(secs / 3600);
+      const m = Math.floor((secs % 3600) / 60);
+      const s = secs % 60;
+      setElapsed(
+        h > 0
+          ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+          : `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`,
+      );
+    };
+    tick();
+    const t = window.setInterval(tick, 1000);
+    return () => window.clearInterval(t);
+  }, [session]);
+
+  async function startSession() {
+    setError(null);
+    try {
+      const meta = await serviceApi.start(nameInput);
+      setSession(meta);
+      setLog([]);
+      setNameInput("");
+      refreshHistory();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function endSession() {
+    setError(null);
+    try {
+      await serviceApi.end();
+      setSession(null);
+      setLog([]);
+      refreshHistory();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function toggleListening() {
+    try {
+      if (listening) {
+        await voiceApi.stop();
+        setListening(false);
+      } else {
+        await voiceApi.start();
+        setListening(true);
+      }
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function changeMode(m: string) {
+    setMode(m);
+    try {
+      await voiceApi.setMode(m);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function blankAll(blank: boolean) {
+    try {
+      await serviceApi.blankAll(blank);
+      refreshSlots();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function respond(s: Suggestion, show: boolean) {
+    try {
+      if (show) {
+        const isScripture = s.itemId.startsWith("bible-");
+        if (isScripture) {
+          await displayApi.setScripture(1, s.itemId, [s.sectionKey]);
+        } else {
+          await displayApi.setSection(1, s.itemId, s.sectionKey);
+        }
+      }
+      await voiceApi.respond(s.id, show);
+      setSuggestions((prev) =>
+        prev.map((x) => (x.id === s.id ? { ...x, status: show ? "shown" : "ignored" } : x)),
+      );
+      refreshSlots();
+      refreshLog();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  const pending = suggestions.filter((s) => s.status === "pending");
+
+  return (
+    <div className="live-page">
+      {/* ---- Session bar ---- */}
+      <div className="session-bar">
+        {session ? (
+          <>
+            <span className="session-live-dot" />
+            <b>{session.name}</b>
+            <span className="session-timer">{elapsed}</span>
+            <button className="danger" onClick={endSession}>
+              ■ End service
+            </button>
+          </>
+        ) : (
+          <>
+            <input
+              className="session-name"
+              placeholder="Service name (e.g. Sunday Morning)"
+              value={nameInput}
+              onChange={(e) => setNameInput(e.currentTarget.value)}
+              onKeyDown={(e) => e.key === "Enter" && startSession()}
+            />
+            <button className="primary" onClick={startSession}>
+              ▶ Start service
+            </button>
+          </>
+        )}
+        <button className="history-toggle" onClick={() => setShowHistory(!showHistory)}>
+          📜 History {history.length > 0 && `(${history.length})`}
+        </button>
+      </div>
+
+      {showHistory && (
+        <div className="history-panel">
+          {history.length === 0 && <span className="muted">No past services yet.</span>}
+          {history.map((h) => (
+            <div key={h.id} className="history-row">
+              <button
+                className="history-name"
+                onClick={async () => {
+                  setLog(await serviceApi.items(h.id));
+                  setShowHistory(false);
+                  setSession(null);
+                }}
+                title="Open this service's log"
+              >
+                {h.name}
+              </button>
+              <span className="muted">
+                {h.startedAt.replace("T", " ").replace("Z", "")}
+                {h.endedAt ? ` → ${h.endedAt.replace("T", " ").replace("Z", "")}` : " (running)"}
+              </span>
+              <button
+                className="danger"
+                title="Delete this service record"
+                onClick={async () => {
+                  await serviceApi.remove(h.id);
+                  refreshHistory();
+                }}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ---- Main grid ---- */}
+      <div className="live-grid">
+        {/* Audio + AI */}
+        <section className="panel">
+          <h3>🎙 Audio & AI</h3>
+          <div className="live-row">
+            <span>{listening ? "● Listening" : "○ Not listening"}</span>
+            <button className={listening ? "danger" : "primary"} onClick={toggleListening}>
+              {listening ? "Stop" : "Listen"}
+            </button>
+          </div>
+          <div className="mode-row">
+            {[
+              ["manual", "Manual"],
+              ["assisted", "Assisted"],
+              ["automatic", "Automatic"],
+            ].map(([m, label]) => (
+              <button key={m} className={mode === m ? "active" : ""} onClick={() => changeMode(m)}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <h4>AI Suggestions {pending.length > 0 && `(${pending.length})`}</h4>
+          {suggestions.length === 0 ? (
+            <div className="empty">No suggestions yet.</div>
+          ) : (
+            suggestions.slice(0, 5).map((s) => (
+              <div key={s.id} className={"suggestion " + s.status}>
+                <div className="suggestion-head">
+                  <b>{s.label}</b>{" "}
+                  <span className="muted">{Math.round(s.confidence * 100)}%</span>
+                </div>
+                {s.status === "pending" && (
+                  <div className="form-actions">
+                    <button className="primary" onClick={() => respond(s, true)}>
+                      SHOW
+                    </button>
+                    <button onClick={() => respond(s, false)}>IGNORE</button>
+                  </div>
+                )}
+              </div>
+            ))
+          )}
+        </section>
+
+        {/* Displays strip */}
+        <section className="panel">
+          <h3>🖼 Displays</h3>
+          <div className="display-strip">
+            {slots.map((s) => (
+              <button
+                key={s.slot}
+                className={"strip-slot" + (s.windowOpen ? " on" : "") + (s.active ? " hot" : "")}
+                onClick={() => displayApi.setActive(s.slot).then(refreshSlots)}
+                title={`Display ${s.slot}${s.windowOpen ? " · live" : ""}`}
+              >
+                <b>{s.slot}</b>
+                <span className="strip-kind">
+                  {s.blank || s.content.kind === "blank"
+                    ? "blank"
+                    : s.content.kind === "scripture"
+                      ? s.content.label
+                      : s.content.kind === "lyrics"
+                        ? s.content.label
+                        : s.content.kind}
+                </span>
+                {s.content.page && <span className="strip-page">{s.content.page}</span>}
+              </button>
+            ))}
+          </div>
+          <div className="form-actions">
+            <button className="danger" onClick={() => blankAll(true)}>
+              ⬛ EMERGENCY BLANK ALL
+            </button>
+            <button onClick={() => blankAll(false)}>Restore all</button>
+          </div>
+          <div className="hotkey-mini muted">
+            Ctrl+Alt+1–5 select · Ctrl+Alt+←/→ step · Ctrl+Alt+B blank
+          </div>
+        </section>
+
+        {/* Service log */}
+        <section className="panel">
+          <h3>📜 Service log</h3>
+          <div className="log-feed" ref={logRef}>
+            {log.length === 0 ? (
+              <div className="empty">
+                {session
+                  ? "Everything shown during this service is recorded here."
+                  : "Start a service, or open one from History."}
+              </div>
+            ) : (
+              log.map((it, i) => (
+                <div key={i} className="log-line">
+                  <span className="muted">
+                    {it.at.replace("T", " ").replace("Z", "")} · D{it.slot}
+                  </span>{" "}
+                  <b>{it.label || it.title}</b>{" "}
+                  <span className="muted">{it.label ? it.title : ""}</span>
+                </div>
+              ))
+            )}
+          </div>
+        </section>
+      </div>
+
+      {error && (
+        <div className="error" style={{ margin: "12px 18px" }}>
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
+type UnlistenFnLike = () => void;
