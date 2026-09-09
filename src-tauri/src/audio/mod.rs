@@ -339,21 +339,32 @@ pub struct CaptureDescription {
     pub error: Option<String>,
 }
 
-pub fn describe_capture(config: &VoiceConfig) -> CaptureDescription {
+/// Resolve a configured device name to a capture device. A saved name that
+/// no longer exists (settings carried to another PC, unplugged USB mixer)
+/// falls back to the system default so a service keeps running, mirroring
+/// the display engine's degraded-mode philosophy.
+fn resolve_input_device(name: Option<&str>) -> Result<(cpal::Device, String), String> {
     let host = cpal::platform::default_host();
-    let resolved = match &config.device {
-        Some(name) => host
+    if let Some(name) = name {
+        let found = host
             .input_devices()
-            .ok()
-            .and_then(|mut ds| {
-                ds.find(|d| d.name().ok().as_deref() == Some(name.as_str()))
-                    .map(|d| (d, name.clone()))
-            }),
-        None => host
-            .default_input_device()
-            .map(|d| (d, "System default input".to_string())),
-    };
-    let Some((device, label)) = resolved else {
+            .map_err(|e| e.to_string())?
+            .find(|d| d.name().ok().as_deref() == Some(name));
+        if let Some(d) = found {
+            return Ok((d, name.to_string()));
+        }
+    }
+    host.default_input_device()
+        .map(|d| (d, "System default input".to_string()))
+        .ok_or_else(|| match name {
+            Some(n) => format!("input device not found: {n}, and no system default input"),
+            None => "no default input device".to_string(),
+        })
+}
+
+pub fn describe_capture(config: &VoiceConfig) -> CaptureDescription {
+    let resolved = resolve_input_device(config.device.as_deref());
+    let Some((device, mut label)) = resolved.ok() else {
         return CaptureDescription {
             device: config.device.clone().unwrap_or_else(|| "default".into()),
             sample_rate: 0,
@@ -362,6 +373,11 @@ pub fn describe_capture(config: &VoiceConfig) -> CaptureDescription {
             error: Some("input device not found".into()),
         };
     };
+    if let Some(saved) = &config.device {
+        if saved != &label {
+            label = format!("{label} (saved device \"{saved}\" not found)");
+        }
+    }
     match device.default_input_config() {
         Ok(c) => CaptureDescription {
             device: label,
@@ -384,17 +400,7 @@ fn open_capture(
     config: &VoiceConfig,
     mut on_segment: impl FnMut(Vec<f32>) + Send + 'static,
 ) -> Result<(cpal::Stream, Arc<SharedFeed>), String> {
-    let host = cpal::platform::default_host();
-    let device = match &config.device {
-        Some(name) => host
-            .input_devices()
-            .map_err(|e| e.to_string())?
-            .find(|d| d.name().ok().as_deref() == Some(name.as_str()))
-            .ok_or_else(|| format!("input device not found: {}", name))?,
-        None => host
-            .default_input_device()
-            .ok_or("no default input device")?,
-    };
+    let (device, _label) = resolve_input_device(config.device.as_deref())?;
 
     let supported = device
         .default_input_config()
@@ -511,4 +517,27 @@ where
 /// Collect the current input level (for level meters).
 pub fn latest_level(feed: &SharedFeed) -> f32 {
     f32::from_bits(feed.level.load(Ordering::Relaxed))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A saved device name from another PC must fall back to the system
+    /// default instead of hard-failing capture (PC-to-PC transfer case).
+    #[test]
+    fn missing_saved_device_falls_back_to_default() {
+        let host = cpal::platform::default_host();
+        if host.default_input_device().is_none() {
+            return; // machine has no input device at all — nothing to fall back to
+        }
+        let cfg = VoiceConfig {
+            device: Some("Definitely Not A Real Device (bogus)".into()),
+            ..Default::default()
+        };
+        let d = describe_capture(&cfg);
+        assert!(d.device.starts_with("System default input"), "label: {}", d.device);
+        assert!(d.device.contains("not found"), "label should name the missing device: {}", d.device);
+        assert_ne!(d.error.as_deref(), Some("input device not found"));
+    }
 }

@@ -1,8 +1,8 @@
-# Locate the VS-bundled CMake so whisper.cpp (via whisper-rs) can build, and
-# libclang for bindgen. cc/cmake crates and VS generators resolve cl.exe themselves.
+# Locate CMake for the vendored whisper.cpp build in build.rs. cc and the VS
+# generator resolve cl.exe themselves. If a bindgen-based crate is ever added,
+# install LLVM and set LIBCLANG_PATH here.
 [env]
-CMAKE = "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe"
-LIBCLANG_PATH = "C:/Program Files/LLVM/bin"
+CMAKE = "C:/Users/HP/AppData/Local/Programs/cmake/bin/cmake.exe"
 
 # Fully static CRT: the release exe runs on any Windows 10+ 64-bit PC with
 # no Visual C++ redistributable installed.

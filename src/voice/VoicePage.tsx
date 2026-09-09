@@ -43,8 +43,15 @@ export default function VoicePage() {
     voiceApi.suggestions().then(setSuggestions).catch(() => {});
   }, []);
 
-  useEffect(() => {
+  // Device lists go stale (mics plugged in after launch, DroidCam started
+  // later, Bluetooth headsets pairing) — re-query whenever the user might
+  // be about to look for a new device.
+  const refreshDevices = useCallback(() => {
     voiceApi.listDevices().then(setDevices).catch(console.error);
+  }, []);
+
+  useEffect(() => {
+    refreshDevices();
     voiceApi.getConfig().then(setConfig).catch(console.error);
     voiceApi.getMode().then(setMode).catch(console.error);
     voiceApi.modelStatus().then(setModel).catch(console.error);
@@ -84,6 +91,12 @@ export default function VoicePage() {
       u2?.();
     };
   }, [refreshSuggestions]);
+
+  useEffect(() => {
+    const onFocus = () => refreshDevices();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [refreshDevices]);
 
   async function saveConfig(patch: Partial<VoiceConfig>) {
     if (!config) return;
@@ -157,6 +170,10 @@ export default function VoicePage() {
   }
 
   const pending = suggestions.filter((s) => s.status === "pending");
+  const savedDeviceMissing =
+    !!config?.device &&
+    devices.length > 0 &&
+    !devices.some((d) => d.name === config.device);
 
   return (
     <div className="voice-page">
@@ -179,11 +196,17 @@ export default function VoicePage() {
             Audio source
             <select
               value={config?.device ?? ""}
+              onFocus={refreshDevices}
               onChange={(e) =>
                 saveConfig({ device: e.currentTarget.value || null })
               }
             >
               <option value="">System default input</option>
+              {savedDeviceMissing && config?.device && (
+                <option value={config.device}>
+                  {config.device} — not found on this PC
+                </option>
+              )}
               {devices.map((d) => (
                 <option key={d.name} value={d.name}>
                   {d.name} {d.isDefault ? "(default)" : ""}{" "}
@@ -192,6 +215,17 @@ export default function VoicePage() {
               ))}
             </select>
           </label>
+          <button onClick={refreshDevices} style={{ alignSelf: "flex-start" }}>
+            ↻ Re-scan devices
+          </button>
+          {savedDeviceMissing && (
+            <div className="warning">
+              ⚠ Saved audio device <b>{config?.device}</b> is not available on
+              this PC (settings carried over from another machine?). Listening
+              will use the <b>System default input</b> until you pick a device
+              above.
+            </div>
+          )}
           <label>
             What does this source contain?
             <select
