@@ -31,6 +31,8 @@ export interface Suggestion {
   sectionKey: string;
   confidence: number;
   status: "pending" | "shown" | "ignored";
+  /** Actual text that would be projected — verify before SHOW. */
+  preview: string;
 }
 
 export interface ModelStatus {
@@ -53,6 +55,8 @@ export const voiceApi = {
   respond: (id: string, show: boolean) =>
     invoke<Suggestion>("respond_suggestion", { id, show }),
   modelStatus: () => invoke<ModelStatus>("model_status"),
+  sttModel: () => invoke<string>("get_stt_model"),
+  setSttModel: (model: string) => invoke("set_stt_model", { model }),
   diagnostics: (seconds = 10) =>
     invoke<Record<string, unknown>>("run_voice_diagnostics", { seconds }),
 };

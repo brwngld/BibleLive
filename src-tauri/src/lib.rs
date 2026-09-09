@@ -132,6 +132,50 @@ pub fn run() {
                     .load_styles(&store);
             }
 
+            // Whisper models carried inside the installer: resolve them from
+            // the resource dir (release) or the source tree (dev), then
+            // pre-copy into %APPDATA%/BibleLive/models in the background so
+            // a fresh install never asks the user to download anything.
+            {
+                let resource = app
+                    .path()
+                    .resource_dir()
+                    .ok()
+                    .map(|rd| rd.join("resources/models"));
+                let dev_fallback = {
+                    #[cfg(debug_assertions)]
+                    {
+                        Some(
+                            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                                .join("resources/models"),
+                        )
+                    }
+                    #[cfg(not(debug_assertions))]
+                    {
+                        None
+                    }
+                };
+                let bundled = resource
+                    .or(dev_fallback)
+                    .filter(|p| p.exists())
+                    .inspect(|p| eprintln!("[startup] bundled whisper models: {}", p.display()));
+                *app.state::<commands::SttHolder>().bundled_models_dir.lock() = bundled.clone();
+                if let Some(b) = bundled {
+                    std::thread::spawn(move || {
+                        match crate::stt::provision_bundled_models(&b) {
+                            Ok(copied) if !copied.is_empty() => eprintln!(
+                                "[startup] provisioned {} whisper model(s) to %APPDATA%/BibleLive/models",
+                                copied.len()
+                            ),
+                            Ok(_) => {}
+                            Err(e) => {
+                                eprintln!("[startup] whisper model provisioning failed: {e}")
+                            }
+                        }
+                    });
+                }
+            }
+
             // Global hotkeys — work even when the operator window is not
             // focused (e.g. the display output has focus during a service).
             // Non-fatal: if any combo is already claimed by other software,
@@ -214,6 +258,8 @@ pub fn run() {
             commands::list_suggestions,
             commands::respond_suggestion,
             commands::model_status,
+            commands::get_stt_model,
+            commands::set_stt_model,
             commands::run_voice_diagnostics,
             commands::list_monitors,
             commands::get_display_slots,

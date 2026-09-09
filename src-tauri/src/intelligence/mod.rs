@@ -379,6 +379,27 @@ pub struct Suggestion {
     pub section_key: String,
     pub confidence: f32,
     pub status: String, // "pending" | "shown" | "ignored"
+    /// The actual text that would be projected, so the operator can verify
+    /// the match before pressing SHOW. Empty when the content is missing.
+    pub preview: String,
+}
+
+/// First lines of the section content a suggestion would project, capped
+/// for card display. Empty string when the section can't be found.
+fn section_preview(store: &ContentStore, item_id: &str, section_key: &str) -> String {
+    store
+        .get_sections_by_keys(item_id, &[section_key.to_string()])
+        .ok()
+        .and_then(|v| v.first().map(|s| s.lines.join(" ")))
+        .map(|text| {
+            if text.chars().count() > 220 {
+                let t: String = text.chars().take(220).collect();
+                format!("{t}…")
+            } else {
+                text
+            }
+        })
+        .unwrap_or_default()
 }
 
 /// Analyze one transcript segment and produce suggestions, feeding the
@@ -397,6 +418,7 @@ pub fn analyze_transcript(
             continue;
         }
         let item_id = format!("bible-kjv-{}", canonical_book_slug(&r.book));
+        let preview = section_preview(store, &item_id, &keys[0]);
         results.push(service.add_suggestion(Suggestion {
             id: new_id(),
             kind: "reference".into(),
@@ -405,6 +427,7 @@ pub fn analyze_transcript(
             section_key: keys[0].clone(),
             confidence: r.confidence,
             status: "pending".into(),
+            preview,
         }));
         break; // strongest reference only, per v1 behavior
     }
@@ -412,6 +435,7 @@ pub fn analyze_transcript(
     // 2. Exact quotations.
     if results.is_empty() {
         if let Some((hit, confidence)) = match_quote(store, text) {
+            let preview = section_preview(store, &hit.item_id, &hit.section_key);
             results.push(service.add_suggestion(Suggestion {
                 id: new_id(),
                 kind: "quote".into(),
@@ -420,6 +444,7 @@ pub fn analyze_transcript(
                 section_key: hit.section_key.clone(),
                 confidence,
                 status: "pending".into(),
+                preview,
             }));
         }
     }
@@ -439,6 +464,29 @@ fn new_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn suggestion_carries_projected_text_preview() {
+        // The operator must be able to verify the verse content before
+        // pressing SHOW — the preview is that verse text, never empty for a
+        // real reference match.
+        let store = crate::content::ContentStore::open_at(
+            std::env::temp_dir().join("bl-preview-test"),
+        )
+        .expect("open test store");
+        let service = crate::session::ServiceState::new();
+        let sugs = analyze_transcript(
+            &store,
+            &std::sync::Arc::new(service),
+            "Turn with me to John 3:16",
+        );
+        assert_eq!(sugs.len(), 1);
+        assert!(
+            sugs[0].preview.contains("God so loved"),
+            "preview should quote the verse, got: {}",
+            sugs[0].preview
+        );
+    }
 
     #[test]
     fn parses_numeric_references() {

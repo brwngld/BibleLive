@@ -393,6 +393,19 @@ textarea:focus {
   font-size: 0.85em;
   margin-bottom: 6px;
 }
+.suggestion-preview {
+  font-style: italic;
+  font-size: 0.9em;
+  line-height: 1.4;
+  color: #cbd5e1;
+  border-left: 3px solid #3b82f6;
+  padding: 2px 0 2px 8px;
+  margin: 4px 0 8px;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 .test-result {
   margin-top: 12px;
   border: 1px solid #334155;

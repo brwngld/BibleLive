@@ -32,6 +32,7 @@ export default function VoicePage() {
   const [testRunning, setTestRunning] = useState(false);
   const [level, setLevel] = useState(0);
   const [buildTag, setBuildTag] = useState("");
+  const [sttModel, setSttModel] = useState("base");
   const [diagRunning, setDiagRunning] = useState(false);
   const [diagText, setDiagText] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<AudioTestResult | null>(null);
@@ -55,6 +56,7 @@ export default function VoicePage() {
     voiceApi.getConfig().then(setConfig).catch(console.error);
     voiceApi.getMode().then(setMode).catch(console.error);
     voiceApi.modelStatus().then(setModel).catch(console.error);
+    voiceApi.sttModel().then(setSttModel).catch(console.error);
     import("@tauri-apps/api/core").then(({ invoke }) =>
       invoke<{ version: string; build: string }>("app_status")
         .then((st) => setBuildTag(`v${st.version} · built ${st.build}`))
@@ -129,6 +131,17 @@ export default function VoicePage() {
     try {
       await voiceApi.setMode(m);
     } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function changeSttModel(m: string) {
+    const prev = sttModel;
+    setSttModel(m);
+    try {
+      await voiceApi.setSttModel(m);
+    } catch (e) {
+      setSttModel(prev);
       setError(String(e));
     }
   }
@@ -255,6 +268,16 @@ export default function VoicePage() {
             <span className="muted">
               threshold {(config?.vadThreshold ?? 0).toFixed(3)} (lower = more
               sensitive)
+            </span>
+          </label>
+          <label>
+            Transcription model
+            <select value={sttModel} onChange={(e) => changeSttModel(e.currentTarget.value)}>
+              <option value="base">Base — most accurate (default)</option>
+              <option value="tiny">Tiny — faster on slower PCs</option>
+            </select>
+            <span className="muted">
+              Tiny transcribes ~4× faster but makes more mistakes.
             </span>
           </label>
 
@@ -426,6 +449,9 @@ export default function VoicePage() {
                     s.itemId}{" "}
                   · {s.sectionKey}
                 </div>
+                {s.preview && (
+                  <div className="suggestion-preview">“{s.preview}”</div>
+                )}
                 {s.status === "pending" ? (
                   <div className="form-actions">
                     <button className="primary" onClick={() => respond(s, true)}>

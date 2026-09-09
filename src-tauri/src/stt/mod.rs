@@ -52,7 +52,12 @@ impl SttEngine {
             // < 0.5 s of audio: nothing useful to transcribe.
             return Ok(String::new());
         }
-        let ctx = *self.ctx.lock();
+        // The guard must stay alive for the whole call: whisper_full mutates
+        // the context, so two callers inside bl_run at once corrupt it and
+        // crash the process (0xC0000005 in crash.log). Copying the raw
+        // pointer out and dropping the guard early serializes nothing.
+        let guard = self.ctx.lock();
+        let ctx = *guard;
         let threads = std::thread::available_parallelism()
             .map(|n| n.get() as c_int)
             .unwrap_or(4);
@@ -138,4 +143,33 @@ pub fn default_model_path() -> std::path::PathBuf {
         .into_iter()
         .find(|p| p.exists())
         .unwrap_or_else(|| models_dir().join("ggml-base.en.bin"))
+}
+
+/// Copy the installer-bundled models into %APPDATA%/BibleLive/models when
+/// the user doesn't already have them, so a fresh install needs no manual
+/// model placement. Never overwrites an existing file (e.g. a manually
+/// updated model). Returns the paths that were copied.
+pub fn provision_bundled_models(
+    bundled_dir: &std::path::Path,
+) -> std::io::Result<Vec<std::path::PathBuf>> {
+    let mut copied = Vec::new();
+    for name in ["ggml-base.en.bin", "ggml-tiny.en.bin"] {
+        let src = bundled_dir.join(name);
+        let dest = models_dir().join(name);
+        if src.exists() && !dest.exists() {
+            std::fs::create_dir_all(models_dir())?;
+            std::fs::copy(&src, &dest)?;
+            copied.push(dest);
+        }
+    }
+    Ok(copied)
+}
+
+/// Resolve a model choice ("base" | "tiny") to its file path.
+pub fn model_path_for(choice: &str) -> std::path::PathBuf {
+    let file = match choice {
+        "tiny" => "ggml-tiny.en.bin",
+        _ => "ggml-base.en.bin",
+    };
+    models_dir().join(file)
 }

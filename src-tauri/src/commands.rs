@@ -983,25 +983,88 @@ use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
 #[derive(Default)]
-pub struct SttHolder(Mutex<Option<Arc<SttEngine>>>);
+pub struct SttHolder {
+    /// Cached engine tagged with the model choice it was built from
+    /// ("base" | "tiny"), so switching models reloads once.
+    engine: Mutex<Option<(String, Arc<SttEngine>)>>,
+    /// Models shipped inside the installer; copied into %APPDATA% when
+    /// missing so a fresh install needs no manual downloads. Set once at
+    /// startup (needs the app handle), read by commands afterwards.
+    pub bundled_models_dir: Mutex<Option<std::path::PathBuf>>,
+}
 
 impl SttHolder {
-    pub fn get_or_load(&self) -> Result<Arc<SttEngine>, String> {
-        let mut guard = self.0.lock();
-        if let Some(engine) = guard.as_ref() {
-            return Ok(engine.clone());
+    /// Load (or reuse) the engine for the configured model choice.
+    /// "base" is the accurate default; "tiny" trades accuracy for ~4x speed
+    /// on modest church hardware.
+    pub fn get_or_load(&self, store: &ContentStore) -> Result<Arc<SttEngine>, String> {
+        let choice = store
+            .get_setting("stt_model")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "base".into());
+        let choice = match choice.as_str() {
+            "tiny" => "tiny".to_string(),
+            _ => "base".to_string(),
+        };
+        let mut guard = self.engine.lock();
+        if let Some((cached, engine)) = guard.as_ref() {
+            if cached == &choice {
+                return Ok(engine.clone());
+            }
         }
-        let path = crate::stt::default_model_path();
+        if let Some(dir) = self.bundled_models_dir.lock().as_ref() {
+            if let Err(e) = crate::stt::provision_bundled_models(dir) {
+                eprintln!("[stt] bundled model provisioning failed: {e}");
+            }
+        }
+        let path = crate::stt::model_path_for(&choice);
         if !path.exists() {
             return Err(format!(
-                "whisper model not found at {} — download ggml-base.en.bin first",
+                "whisper model not found at {} — switch models in Audio Setup or place the file there",
                 path.display()
             ));
         }
         let engine = Arc::new(SttEngine::load(&path)?);
-        *guard = Some(engine.clone());
+        *guard = Some((choice, engine.clone()));
         Ok(engine)
     }
+}
+
+#[tauri::command]
+pub async fn get_stt_model(store: State<'_, ContentStore>) -> Result<String, String> {
+    let s = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        Ok(s.get_setting("stt_model")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "base".into()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn set_stt_model(
+    store: State<'_, ContentStore>,
+    model: String,
+) -> Result<(), String> {
+    if model != "base" && model != "tiny" {
+        return Err(format!("unknown model: {model}"));
+    }
+    // Validate the file exists before saving, so the UI can show an error
+    // now instead of failing later at listen time.
+    if !crate::stt::model_path_for(&model).exists() {
+        return Err(format!(
+            "{model} model file not found in %APPDATA%/BibleLive/models"
+        ));
+    }
+    let s = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        s.set_setting("stt_model", &model).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1087,7 +1150,7 @@ pub async fn start_listening(
     mgr: State<'_, audio::CaptureManager>,
     stt: State<'_, SttHolder>,
 ) -> Result<(), String> {
-    let engine = stt.get_or_load()?;
+    let engine = stt.get_or_load(store.inner())?;
     let config = get_voice_config(store.clone()).await?;
     let app_handle = app.clone();
     let store_clone = store.inner().clone();
@@ -1139,7 +1202,7 @@ pub async fn audio_test(
     mgr: State<'_, audio::CaptureManager>,
     stt: State<'_, SttHolder>,
 ) -> Result<AudioTestResult, String> {
-    let engine = stt.get_or_load()?;
+    let engine = stt.get_or_load(store.inner())?;
     let config = get_voice_config(store.clone()).await?;
     let s = store.inner().clone();
     let mgr_inner = mgr.inner().clone();
@@ -1245,7 +1308,7 @@ pub async fn run_voice_diagnostics(
     let config = get_voice_config(store.clone()).await?;
     let desc = audio::describe_capture(&config);
 
-    let engine = stt.get_or_load().ok();
+    let engine = stt.get_or_load(store.inner()).ok();
     let model_path = crate::stt::default_model_path();
 
     let segments: Arc<Mutex<Vec<Vec<f32>>>> = Arc::new(Mutex::new(Vec::new()));
@@ -1384,18 +1447,29 @@ pub struct ModelStatus {
 }
 
 #[tauri::command]
-pub fn model_status() -> ModelStatus {
+pub async fn model_status(stt: State<'_, SttHolder>) -> Result<ModelStatus, String> {
     // Prefer whichever model is present (base.en accurate, tiny.en fast).
-    let path = crate::stt::default_model_path();
-    let exists = path.exists();
-    let size_mb = if exists {
-        std::fs::metadata(&path).ok().map(|m| m.len() / 1024 / 1024)
-    } else {
-        None
-    };
-    ModelStatus {
-        path: path.display().to_string(),
-        exists,
-        size_mb,
-    }
+    // A fresh install self-provisions from the installer-bundled copies first.
+    let bundled = stt.inner().bundled_models_dir.lock().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(dir) = &bundled {
+            if let Err(e) = crate::stt::provision_bundled_models(dir) {
+                eprintln!("[stt] bundled model provisioning failed: {e}");
+            }
+        }
+        let path = crate::stt::default_model_path();
+        let exists = path.exists();
+        let size_mb = if exists {
+            std::fs::metadata(&path).ok().map(|m| m.len() / 1024 / 1024)
+        } else {
+            None
+        };
+        Ok(ModelStatus {
+            path: path.display().to_string(),
+            exists,
+            size_mb,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
