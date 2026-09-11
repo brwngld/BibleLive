@@ -13,6 +13,8 @@ export interface VoiceConfig {
   device: string | null;
   contentType: "speech" | "mixed";
   vadThreshold: number;
+  /** Rolling window for live transcription while speech continues (ms). */
+  partialWindowMs: number;
 }
 
 export interface AudioTestResult {
@@ -91,6 +93,9 @@ export interface SuggestionEvent {
 
 export function onTranscript(cb: (e: TranscriptEvent) => void): Promise<UnlistenFn> {
   return listen<TranscriptEvent>("voice-transcript", (ev) => cb(ev.payload));
+}
+export function onPartialTranscript(cb: (e: TranscriptEvent) => void): Promise<UnlistenFn> {
+  return listen<TranscriptEvent>("voice-transcript-partial", (ev) => cb(ev.payload));
 }
 
 export function onSuggestion(cb: (e: SuggestionEvent) => void): Promise<UnlistenFn> {

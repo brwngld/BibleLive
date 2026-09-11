@@ -64,6 +64,10 @@ pub struct VoiceConfig {
     /// your room's noise floor (the diagnostics report shows both numbers):
     /// ~0.015 works for a typical quiet room with a normal speaking voice.
     pub vad_threshold: f32,
+    /// Rolling window for live (partial) transcription while speech
+    /// continues, in milliseconds. 2000 is a good start for Tiny on modest
+    /// CPUs; shorter = snappier live text but more compute.
+    pub partial_window_ms: u32,
 }
 
 impl Default for VoiceConfig {
@@ -72,6 +76,7 @@ impl Default for VoiceConfig {
             device: None,
             content_type: "speech".into(),
             vad_threshold: 0.015,
+            partial_window_ms: 2000,
         }
     }
 }
@@ -82,6 +87,7 @@ impl VoiceConfig {
             self.content_type = "speech".into();
         }
         self.vad_threshold = self.vad_threshold.clamp(0.0005, 0.1);
+        self.partial_window_ms = self.partial_window_ms.clamp(1200, 4000);
     }
 }
 
@@ -180,6 +186,18 @@ const FLOOR_MULTIPLIER: f32 = 2.5;
 /// from frame one, never see a quiet moment, and never recover.
 const CALIBRATION_FRAMES: usize = 34;
 
+/// What the segmenter hands the consumer per 30 ms frame.
+#[derive(Debug)]
+pub enum AudioEvent {
+    /// Rolling copy of the utterance so far, emitted roughly every
+    /// `partial_window_ms` while speech continues. Feeds live transcription
+    /// and progressive Scripture matching — never projected or finalized.
+    Partial(Vec<f32>),
+    /// Completed utterance after the end-of-speech pause. This is the only
+    /// audio that counts as final and drives verified suggestions.
+    Final(Vec<f32>),
+}
+
 /// Energy-gate VAD with pre-roll and hangover. Feed 16 kHz mono frames;
 /// completed speech segments come back from `feed`.
 ///
@@ -188,10 +206,22 @@ const CALIBRATION_FRAMES: usize = 34;
 /// configured sensitivity and floor × 2.5. A fixed threshold either misses
 /// soft speech when set high or triggers on room noise when set low — the
 /// room never sits still, so the detector must track it.
+/// What one fed frame produced.
+#[derive(Debug, PartialEq)]
+pub enum FeedOutcome {
+    Nothing,
+    /// Rolling snapshot of the utterance so far.
+    Partial(Vec<f32>),
+    /// Completed utterance.
+    Final(Vec<f32>),
+}
+
 pub struct Segmenter {
     threshold: f32,
     noise_floor: f32,
     cal_frames: usize,
+    partial_every: usize,
+    new_frames: usize,
     preroll: std::collections::VecDeque<Vec<f32>>,
     current: Vec<f32>,
     silence_frames: usize,
@@ -205,6 +235,8 @@ impl Segmenter {
             threshold,
             noise_floor: 0.0,
             cal_frames: CALIBRATION_FRAMES,
+            partial_every: 0,
+            new_frames: 0,
             preroll: std::collections::VecDeque::with_capacity(PREROLL_FRAMES),
             current: Vec::new(),
             silence_frames: 0,
@@ -213,13 +245,19 @@ impl Segmenter {
         }
     }
 
+    /// Emit a `Partial` snapshot every `frames` frames of ongoing speech
+    /// (0 disables partials — tests and the audio test use this).
+    pub fn with_partial_every(mut self, frames: usize) -> Self {
+        self.partial_every = frames;
+        self
+    }
+
     fn effective_threshold(&self) -> f32 {
         self.threshold.max(self.noise_floor * FLOOR_MULTIPLIER)
     }
 
-    /// Feed one 30 ms frame (480 samples, 16 kHz mono). Returns a completed
-    /// segment when the hangover timer expires or the cap is hit.
-    pub fn feed(&mut self, frame: &[f32]) -> Option<Vec<f32>> {
+    /// Feed one 30 ms frame (480 samples, 16 kHz mono).
+    pub fn feed(&mut self, frame: &[f32]) -> FeedOutcome {
         let rms = (frame.iter().map(|s| s * s).sum::<f32>() / frame.len() as f32).sqrt();
 
         // Calibration: learn the room fast before gating anything.
@@ -234,7 +272,7 @@ impl Segmenter {
                 self.preroll.pop_front();
             }
             self.preroll.push_back(frame.to_vec());
-            return None;
+            return FeedOutcome::Nothing;
         }
 
         let is_speech = rms >= self.effective_threshold();
@@ -250,14 +288,17 @@ impl Segmenter {
             self.silence_frames = 0;
             if !self.in_speech {
                 self.in_speech = true;
+                self.new_frames = 0;
                 // flush pre-roll into the current segment
                 for f in self.preroll.drain(..) {
                     self.current.extend_from_slice(&f);
                 }
             }
             self.current.extend_from_slice(frame);
+            self.new_frames += 1;
         } else if self.in_speech {
             self.current.extend_from_slice(frame);
+            self.new_frames += 1;
             self.silence_frames += 1;
             if self.silence_frames >= END_SILENCE_FRAMES {
                 return self.finish();
@@ -273,19 +314,26 @@ impl Segmenter {
         if self.current.len() >= MAX_SEGMENT_FRAMES * FRAME {
             return self.finish();
         }
-        None
+
+        // Rolling live snapshot while the utterance is still going.
+        if self.in_speech && self.partial_every > 0 && self.new_frames >= self.partial_every {
+            self.new_frames = 0;
+            return FeedOutcome::Partial(self.current.clone());
+        }
+        FeedOutcome::Nothing
     }
 
-    fn finish(&mut self) -> Option<Vec<f32>> {
+    fn finish(&mut self) -> FeedOutcome {
         self.in_speech = false;
         self.silence_frames = 0;
+        self.new_frames = 0;
         let seg = std::mem::take(&mut self.current);
         if self.speech_frames >= MIN_SPEECH_FRAMES && seg.len() >= FRAME {
             self.speech_frames = 0;
-            Some(seg)
+            FeedOutcome::Final(seg)
         } else {
             self.speech_frames = 0;
-            None
+            FeedOutcome::Nothing
         }
     }
 }
@@ -323,16 +371,17 @@ impl CaptureManager {
         self.session.lock().is_some()
     }
 
-    /// Start live listening. `on_segment` receives speech segments (16 kHz
-    /// mono f32); `on_level` receives the input level (~every 150 ms) for
-    /// live meters. Both run on capture worker threads.
+    /// Start live listening. `on_event` receives rolling `Partial`
+    /// snapshots (~every `partial_window_ms`) and completed `Final`
+    /// utterances (16 kHz mono f32); `on_level` receives the input level
+    /// (~every 150 ms) for live meters. Both run on capture worker threads.
     pub fn start(
         &self,
         config: &VoiceConfig,
-        on_segment: impl FnMut(Vec<f32>) + Send + 'static,
+        on_event: impl FnMut(AudioEvent) + Send + 'static,
         on_level: impl Fn(f32) + Send + 'static,
     ) -> Result<(), String> {
-        self.start_collector(config, on_segment, on_level)
+        self.start_collector(config, on_event, on_level)
             .map(|_| ())
     }
 
@@ -341,7 +390,7 @@ impl CaptureManager {
     pub fn start_collector(
         &self,
         config: &VoiceConfig,
-        on_segment: impl FnMut(Vec<f32>) + Send + 'static,
+        on_event: impl FnMut(AudioEvent) + Send + 'static,
         on_level: impl Fn(f32) + Send + 'static,
     ) -> Result<Arc<SharedFeed>, String> {
         let mut guard = self.session.lock();
@@ -355,7 +404,7 @@ impl CaptureManager {
         let config = config.clone();
 
         // The capture thread owns the cpal Stream for its whole lifetime.
-        std::thread::spawn(move || match open_capture(&config, on_segment) {
+        std::thread::spawn(move || match open_capture(&config, on_event) {
             Ok((stream, feed)) => {
                 let _ = init_tx.send(Ok(()));
                 let _ = feed_tx.send(Arc::clone(&feed));
@@ -501,7 +550,7 @@ pub fn describe_capture(config: &VoiceConfig) -> CaptureDescription {
 
 fn open_capture(
     config: &VoiceConfig,
-    mut on_segment: impl FnMut(Vec<f32>) + Send + 'static,
+    mut on_event: impl FnMut(AudioEvent) + Send + 'static,
 ) -> Result<(cpal::Stream, Arc<SharedFeed>), String> {
     let (device, _label) = resolve_input_device(config.device.as_deref())?;
 
@@ -513,21 +562,24 @@ fn open_capture(
     let sample_format = supported.sample_format();
 
     let feed = Arc::new(SharedFeed {
-        segmenter: Mutex::new(Segmenter::new(config.vad_threshold)),
+        segmenter: Mutex::new(
+            Segmenter::new(config.vad_threshold)
+                .with_partial_every((config.partial_window_ms / 30) as usize),
+        ),
         leftover: Mutex::new(Vec::new()),
         level: AtomicU32::new(0),
         agc_peak: AtomicU32::new(0),
         last_gain: AtomicU32::new(0),
     });
 
-    let (seg_tx, seg_rx) = mpsc::channel::<Vec<f32>>();
+    let (seg_tx, seg_rx) = mpsc::channel::<AudioEvent>();
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
 
     // Worker: forward completed segments to the consumer until stop.
     std::thread::spawn(move || {
         loop {
             match seg_rx.recv_timeout(std::time::Duration::from_millis(300)) {
-                Ok(seg) => on_segment(seg),
+                Ok(ev) => on_event(ev),
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
@@ -558,7 +610,7 @@ fn build_stream<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     feed: Arc<SharedFeed>,
-    seg_tx: mpsc::Sender<Vec<f32>>,
+    seg_tx: mpsc::Sender<AudioEvent>,
     in_rate: u32,
     channels: usize,
     err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
@@ -607,9 +659,16 @@ where
             let mut segmenter = feed.segmenter.lock();
             while leftover.len() >= FRAME {
                 let frame: Vec<f32> = leftover.drain(..FRAME).collect();
-                if let Some(mut seg) = segmenter.feed(&frame) {
-                    agc_boost_segment(&mut seg);
-                    let _ = seg_tx.send(seg);
+                match segmenter.feed(&frame) {
+                    FeedOutcome::Nothing => {}
+                    FeedOutcome::Partial(mut buf) => {
+                        agc_boost_segment(&mut buf);
+                        let _ = seg_tx.send(AudioEvent::Partial(buf));
+                    }
+                    FeedOutcome::Final(mut seg) => {
+                        agc_boost_segment(&mut seg);
+                        let _ = seg_tx.send(AudioEvent::Final(seg));
+                    }
                 }
             }
         },
@@ -673,12 +732,12 @@ mod tests {
         let mut s = Segmenter::new(0.001); // very sensitive setting
         let noise = vec![0.02f32; FRAME]; // constant "room" at RMS 0.02
         for _ in 0..66 {
-            assert!(s.feed(&noise).is_none(), "room noise must not trigger");
+            assert_eq!(s.feed(&noise), FeedOutcome::Nothing, "room noise must not trigger");
         }
         // 0.045 is above the 0.001 threshold but below floor×2.5 (0.05).
         let soft = vec![0.045f32; FRAME];
         for _ in 0..60 {
-            assert!(s.feed(&soft).is_none(), "below adaptive floor must not trigger");
+            assert_eq!(s.feed(&soft), FeedOutcome::Nothing, "below adaptive floor must not trigger");
         }
         // Clear speech closes a segment after the hangover.
         let loud = vec![0.3f32; FRAME];
@@ -687,13 +746,41 @@ mod tests {
         }
         let mut seg = None;
         for _ in 0..30 {
-            if let Some(x) = s.feed(&noise) {
+            if let FeedOutcome::Final(x) = s.feed(&noise) {
                 seg = Some(x);
                 break;
             }
         }
         let seg = seg.expect("speech above floor must produce a segment");
         assert!(seg.len() >= 10 * FRAME, "segment keeps all speech frames");
+    }
+
+    /// Partials: while speech continues, a rolling snapshot is emitted every
+    /// `partial_every` frames; the Final still contains everything.
+    #[test]
+    fn segmenter_emits_rolling_partials() {
+        let mut s = Segmenter::new(0.015).with_partial_every(10);
+        let quiet = vec![0.001f32; FRAME];
+        for _ in 0..40 {
+            s.feed(&quiet); // calibration + settle
+        }
+        let speech = vec![0.4f32; FRAME];
+        let mut partials = 0usize;
+        for _ in 0..25 {
+            if let FeedOutcome::Partial(buf) = s.feed(&speech) {
+                partials += 1;
+                assert!(!buf.is_empty());
+            }
+        }
+        assert_eq!(partials, 2, "25 speech frames with a 10-frame window → 2 partials");
+        let mut final_len = 0;
+        for _ in 0..40 {
+            if let FeedOutcome::Final(buf) = s.feed(&quiet) {
+                final_len = buf.len();
+                break;
+            }
+        }
+        assert!(final_len >= 25 * FRAME, "final keeps the whole utterance");
     }
 
     /// Short but clear utterances (~0.25 s) are kept, not silently dropped.
@@ -710,7 +797,7 @@ mod tests {
         }
         let mut seg = None;
         for _ in 0..40 {
-            if let Some(x) = s.feed(&quiet) {
+            if let FeedOutcome::Final(x) = s.feed(&quiet) {
                 seg = Some(x);
                 break;
             }
@@ -730,6 +817,22 @@ mod tests {
         let mut silent = vec![0.0001f32; 4800];
         agc_boost_segment(&mut silent);
         assert!(silent.iter().all(|x| x.abs() <= 0.0001));
+    }
+
+    /// VoiceConfig.validate clamps every tunable into a sane range.
+    #[test]
+    fn voice_config_clamps() {
+        let mut c = VoiceConfig {
+            vad_threshold: 5.0,
+            partial_window_ms: 100,
+            ..Default::default()
+        };
+        c.validate();
+        assert_eq!(c.vad_threshold, 0.1);
+        assert_eq!(c.partial_window_ms, 1200);
+        c.partial_window_ms = 9000;
+        c.validate();
+        assert_eq!(c.partial_window_ms, 4000);
     }
 
     /// A saved device name from another PC must fall back to the system

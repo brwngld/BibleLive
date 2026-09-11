@@ -1157,31 +1157,89 @@ pub async fn start_listening(
     let service_clone = service.inner().clone();
 
     let app_for_level = app.clone();
+    let live = Arc::new(Mutex::new(intelligence::LiveMatcher::new()));
     mgr.start(
         &config,
-        move |seg| {
+        move |ev| {
         let engine = engine.clone();
         let app = app_handle.clone();
         let store = store_clone.clone();
         let service = service_clone.clone();
+        let live = live.clone();
         // Transcribe off the audio-forwarding thread.
-        std::thread::spawn(move || match engine.transcribe(&seg) {
-            Ok(text) if !text.is_empty() => {
-                let _ = app.emit("voice-transcript", TranscriptPayload { text: text.clone() });
-                let mode = service.mode();
-                for s in intelligence::analyze_transcript(&store, &service, &text) {
-                    let _ = app.emit(
-                        "voice-suggestion",
-                        SuggestionPayload {
-                            suggestion: s,
-                            mode: mode.as_str().to_string(),
-                        },
-                    );
+        std::thread::spawn(move || {
+            let is_final = matches!(ev, audio::AudioEvent::Final(_));
+            let samples = match ev {
+                audio::AudioEvent::Partial(buf) | audio::AudioEvent::Final(buf) => buf,
+            };
+            match engine.transcribe(&samples) {
+                Ok(text) if !text.is_empty() => {
+                    if is_final {
+                        // Final, pause-verified transcript: full matching.
+                        let _ = app.emit("voice-transcript", TranscriptPayload { text: text.clone() });
+                        let mode = service.mode();
+                        let finals = intelligence::analyze_transcript(&store, &service, &text);
+                        let confirmed: Vec<(String, String)> = finals
+                            .iter()
+                            .map(|s| (s.item_id.clone(), s.section_key.clone()))
+                            .collect();
+                        for s in finals {
+                            let _ = app.emit(
+                                "voice-suggestion",
+                                SuggestionPayload {
+                                    suggestion: s,
+                                    mode: mode.as_str().to_string(),
+                                },
+                            );
+                        }
+                        // Retire a live card the verified pass did not confirm.
+                        let mut lm = live.lock();
+                        if let Some(key) = lm.promoted_key().cloned() {
+                            if !confirmed.contains(&key) {
+                                for p in service.pending_suggestions() {
+                                    if p.status == "pending"
+                                        && (p.item_id.clone(), p.section_key.clone()) == key
+                                    {
+                                        if let Some(retired) =
+                                            service.set_suggestion_status(&p.id, "ignored")
+                                        {
+                                            let _ = app.emit(
+                                                "voice-suggestion",
+                                                SuggestionPayload {
+                                                    suggestion: retired,
+                                                    mode: mode.as_str().to_string(),
+                                                },
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            lm.retire();
+                        }
+                    } else {
+                        // Rolling partial: live transcript + progressive
+                        // Scripture matching with confidence/stability gating.
+                        let _ = app.emit(
+                            "voice-transcript-partial",
+                            TranscriptPayload { text: text.clone() },
+                        );
+                        let mut lm = live.lock();
+                        if let Some(s) = lm.observe(&store, &text) {
+                            let s = service.upsert_suggestion(s);
+                            let _ = app.emit(
+                                "voice-suggestion",
+                                SuggestionPayload {
+                                    suggestion: s,
+                                    mode: service.mode().as_str().to_string(),
+                                },
+                            );
+                        }
+                    }
                 }
-            }
-            Ok(_) => {}
-            Err(e) => {
-                eprintln!("transcription failed: {e}");
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("transcription failed: {e}");
+                }
             }
         });
         },
@@ -1213,8 +1271,11 @@ pub async fn audio_test(
         }
         let segments: Arc<Mutex<Vec<Vec<f32>>>> = Arc::new(Mutex::new(Vec::new()));
         let segs = segments.clone();
-        let collect = move |seg: Vec<f32>| {
-            segs.lock().push(seg);
+        let collect = move |ev: audio::AudioEvent| {
+            // Only completed utterances count for the test.
+            if let audio::AudioEvent::Final(seg) = ev {
+                segs.lock().push(seg);
+            }
         };
 
         let device_label = config
@@ -1323,7 +1384,11 @@ pub async fn run_voice_diagnostics(
         let lvls = levels_for_task;
         let started = mgr_inner.start_collector(
             &config_for_task,
-            move |seg| segs.lock().push(seg),
+            move |ev| {
+                if let audio::AudioEvent::Final(seg) = ev {
+                    segs.lock().push(seg);
+                }
+            },
             move |lv| {
                 let mut q = lvls.lock();
                 q.push(lv);

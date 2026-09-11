@@ -92,6 +92,24 @@ impl ServiceState {
         s
     }
 
+    /// Insert or refresh: a live (partial-transcript) suggestion replaces
+    /// the pending card for the same content instead of stacking duplicate
+    /// cards as the match strengthens.
+    pub fn upsert_suggestion(&self, s: Suggestion) -> Suggestion {
+        let mut q = self.suggestions.lock();
+        if let Some(existing) = q.iter_mut().rev().find(|e| {
+            e.status == "pending" && e.item_id == s.item_id && e.section_key == s.section_key
+        }) {
+            existing.kind = s.kind.clone();
+            existing.label = s.label.clone();
+            existing.confidence = s.confidence;
+            existing.preview = s.preview.clone();
+            return existing.clone();
+        }
+        drop(q);
+        self.add_suggestion(s)
+    }
+
     pub fn pending_suggestions(&self) -> Vec<Suggestion> {
         self.suggestions
             .lock()

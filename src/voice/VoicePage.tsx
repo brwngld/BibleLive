@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   voiceApi,
   onTranscript,
+  onPartialTranscript,
   onSuggestion,
   onLevel,
   type UnlistenFn,
@@ -28,6 +29,7 @@ export default function VoicePage() {
   const [listening, setListening] = useState(false);
   const [model, setModel] = useState<{ exists: boolean; path: string; sizeMb: number | null } | null>(null);
   const [transcript, setTranscript] = useState<TranscriptLine[]>([]);
+  const [partial, setPartial] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [testRunning, setTestRunning] = useState(false);
   const [level, setLevel] = useState(0);
@@ -66,10 +68,9 @@ export default function VoicePage() {
     refreshSuggestions();
 
     let unlisteners: Promise<UnlistenFn>[] = [];
-    let u1: UnlistenFn | undefined;
-    let u2: UnlistenFn | undefined;
     unlisteners.push(
       onTranscript((e: TranscriptEvent) => {
+        setPartial(null); // the final line replaces the live one
         setTranscript((prev) =>
           [...prev, { text: e.text, at: new Date().toLocaleTimeString() }].slice(-100),
         );
@@ -79,18 +80,35 @@ export default function VoicePage() {
       }),
     );
     unlisteners.push(
+      onPartialTranscript((e: TranscriptEvent) => {
+        setPartial(e.text);
+        requestAnimationFrame(() => {
+          feedRef.current?.scrollTo({ top: feedRef.current.scrollHeight });
+        });
+      }),
+    );
+    unlisteners.push(
       onSuggestion((e: SuggestionEvent) => {
-        setSuggestions((prev) => [e.suggestion, ...prev].slice(0, 40));
+        // Live (partial) and verified suggestions for the same verse replace
+        // the pending card instead of stacking duplicates.
+        setSuggestions((prev) => {
+          const rest = prev.filter(
+            (x) =>
+              x.status !== "pending" ||
+              x.itemId !== e.suggestion.itemId ||
+              x.sectionKey !== e.suggestion.sectionKey,
+          );
+          return [e.suggestion, ...rest].slice(0, 40);
+        });
       }),
     );
     unlisteners.push(onLevel((lv) => setLevel(lv)));
-    Promise.all(unlisteners).then(([a, b]) => {
-      u1 = a;
-      u2 = b;
+    let fns: UnlistenFn[] = [];
+    Promise.all(unlisteners).then((f) => {
+      fns = f;
     });
     return () => {
-      u1?.();
-      u2?.();
+      fns.forEach((f) => f());
     };
   }, [refreshSuggestions]);
 
@@ -281,6 +299,24 @@ export default function VoicePage() {
               Tiny transcribes ~4× faster but makes more mistakes.
             </span>
           </label>
+          <label>
+            Live matching window
+            <select
+              value={config?.partialWindowMs ?? 2000}
+              onChange={(e) =>
+                saveConfig({ partialWindowMs: Number(e.currentTarget.value) })
+              }
+            >
+              <option value={1200}>1.2 s — snappiest</option>
+              <option value={2000}>2 s — recommended</option>
+              <option value={3000}>3 s</option>
+              <option value={4000}>4 s — gentlest</option>
+            </select>
+            <span className="muted">
+              How often live text and Scripture matches update while someone
+              is still speaking.
+            </span>
+          </label>
 
           {buildTag && <div className="muted build-tag">{buildTag}</div>}
 
@@ -414,14 +450,18 @@ export default function VoicePage() {
 
           <h4>Transcript</h4>
           <div className="transcript-feed" ref={feedRef}>
-            {transcript.length === 0 ? (
+            {transcript.length === 0 && !partial && (
               <div className="empty">Nothing heard yet.</div>
-            ) : (
-              transcript.map((t, i) => (
-                <div key={i} className="transcript-line">
-                  <span className="muted">{t.at}</span> {t.text}
-                </div>
-              ))
+            )}
+            {transcript.map((t, i) => (
+              <div key={i} className="transcript-line">
+                <span className="muted">{t.at}</span> {t.text}
+              </div>
+            ))}
+            {partial && (
+              <div className="transcript-line partial">
+                <span className="muted">live</span> {partial}…
+              </div>
             )}
           </div>
         </section>

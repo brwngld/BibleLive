@@ -371,6 +371,10 @@ textarea:focus {
   margin-bottom: 6px;
   line-height: 1.5;
 }
+.transcript-line.partial {
+  color: #93c5fd;
+  font-style: italic;
+}
 .suggestion {
   border: 1px solid #334155;
   border-radius: 10px;

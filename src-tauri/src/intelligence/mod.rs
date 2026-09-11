@@ -367,6 +367,155 @@ fn quote_coverage(_phrase: &str, _snippet: &str) -> Option<f32> {
     Some(1.0)
 }
 
+/// Ranked quote candidates from a PARTIAL transcript (progressive matching).
+/// Prefix phrases from 3 words are searched — as the preacher speaks,
+/// "For God so loved" already points at John 3:16 — and distinct
+/// (item, section) hits come back best-first for stability filtering.
+pub fn match_quote_candidates(
+    store: &ContentStore,
+    text: &str,
+    limit: usize,
+) -> Vec<(SearchHit, f32)> {
+    let words: Vec<String> = text
+        .split(|c: char| !(c.is_alphanumeric() || c == '\''))
+        .filter(|w| !w.is_empty())
+        .map(|w| w.to_lowercase())
+        .collect();
+    if words.len() < 3 {
+        return Vec::new();
+    }
+    let max_len = words.len().min(14);
+    let mut best: Vec<(SearchHit, f32)> = Vec::new();
+    for len in (3..=max_len).rev() {
+        for start in 0..=(words.len() - len) {
+            let phrase = words[start..start + len].join(" ");
+            let fts = format!("\"{}\"", phrase.replace('\'', "''"));
+            let Ok(hits) = store.search_phrase(&fts, 5) else {
+                continue;
+            };
+            for hit in hits {
+                if quote_coverage(&phrase, &hit.snippet).is_none() {
+                    continue;
+                }
+                // Confidence grows with matched length relative to how much
+                // has been said so far.
+                let conf = (0.35 + 0.6 * (len as f32 / max_len as f32)).min(0.97);
+                if let Some(existing) = best.iter_mut().find(|(h, _)| {
+                    h.item_id == hit.item_id && h.section_key == hit.section_key
+                }) {
+                    if existing.1 < conf {
+                        existing.1 = conf;
+                    }
+                } else {
+                    best.push((hit, conf));
+                }
+            }
+        }
+    }
+    best.sort_by(|a, b| b.1.total_cmp(&a.1));
+    best.truncate(limit);
+    best
+}
+
+/// Stability filter for progressive Scripture matching. A live suggestion is
+/// promoted only when the same candidate stays on top of the ranking across
+/// consecutive partials AND clearly dominates the runner-up — ambiguous
+/// prefixes ("For God…" opens many verses) must never flash cards.
+pub struct LiveMatcher {
+    last_top: Option<(String, String)>,
+    streak: u32,
+    promoted: Option<(String, String)>,
+}
+
+impl Default for LiveMatcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LiveMatcher {
+    pub fn new() -> Self {
+        Self {
+            last_top: None,
+            streak: 0,
+            promoted: None,
+        }
+    }
+
+    /// Observe one partial transcript; returns a suggestion when a stable,
+    /// dominant candidate should be shown live (id is assigned by the
+    /// service, pass it through `upsert_suggestion`).
+    pub fn observe(&mut self, store: &ContentStore, text: &str) -> Option<Suggestion> {
+        // A complete spoken reference is unambiguous — fire immediately.
+        for r in parse_references(text) {
+            let keys = r.section_keys();
+            if keys.is_empty() {
+                continue;
+            }
+            let item_id = format!("bible-kjv-{}", canonical_book_slug(&r.book));
+            let preview = section_preview(store, &item_id, &keys[0]);
+            self.promoted = Some((item_id.clone(), keys[0].clone()));
+            return Some(Suggestion {
+                id: String::new(),
+                kind: "reference".into(),
+                label: r.label(),
+                item_id,
+                section_key: keys[0].clone(),
+                confidence: r.confidence * 0.9, // live, not yet pause-verified
+                status: "pending".into(),
+                preview,
+            });
+        }
+
+        let cands = match_quote_candidates(store, text, 3);
+        let Some((top_hit, top_conf)) = cands.first().cloned() else {
+            self.last_top = None;
+            self.streak = 0;
+            return None;
+        };
+        let top = (top_hit.item_id.clone(), top_hit.section_key.clone());
+        let runner_up = cands.get(1).map(|(_, c)| *c).unwrap_or(0.0);
+        let dominant = runner_up == 0.0 || top_conf - runner_up >= 0.15;
+
+        if self.last_top.as_ref() == Some(&top) {
+            self.streak += 1;
+        } else {
+            self.last_top = Some(top.clone());
+            self.streak = 1;
+        }
+
+        // Promote from the 2nd consecutive sighting with clear dominance.
+        if self.streak >= 2 && dominant && top_conf >= 0.55 {
+            self.promoted = Some(top);
+            let preview = section_preview(store, &top_hit.item_id, &top_hit.section_key);
+            return Some(Suggestion {
+                id: String::new(),
+                kind: "quote".into(),
+                label: top_hit.section_label.clone(),
+                item_id: top_hit.item_id.clone(),
+                section_key: top_hit.section_key.clone(),
+                confidence: top_conf,
+                status: "pending".into(),
+                preview,
+            });
+        }
+        None
+    }
+
+    /// The candidate currently promoted live, if any — verified or retired
+    /// when the final transcript arrives.
+    pub fn promoted_key(&self) -> Option<&(String, String)> {
+        self.promoted.as_ref()
+    }
+
+    /// Forget the promoted candidate (final pass did not confirm it).
+    pub fn retire(&mut self) {
+        self.promoted = None;
+        self.last_top = None;
+        self.streak = 0;
+    }
+}
+
 // ---- Suggestions -------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]
@@ -484,6 +633,50 @@ mod tests {
         let svc2 = std::sync::Arc::new(crate::session::ServiceState::new());
         let r2 = analyze_transcript(&store, &svc2, "and we know that all things work together for good to them that love God");
         eprintln!("BENCH analyze(quote sweep, {} sug): {:?}", r2.len(), t0.elapsed());
+    }
+
+    /// Progressive matching: an ambiguous prefix must not promote, and a
+    /// candidate must hold the top spot across consecutive partials with
+    /// clear dominance before a live suggestion fires.
+    #[test]
+    fn live_matcher_requires_stability_and_dominance() {
+        let store = crate::content::ContentStore::open_at(
+            std::env::temp_dir().join("bl-preview-test"),
+        )
+        .expect("open test store");
+        let mut lm = LiveMatcher::new();
+
+        // Too short to match anything.
+        assert!(lm.observe(&store, "for god").is_none());
+        // First sighting of a real candidate: never promote on one partial.
+        assert!(
+            lm.observe(&store, "for god so loved").is_none(),
+            "first sighting must not promote"
+        );
+        // Same candidate on top again → promote John 3:16 live.
+        let s = lm
+            .observe(&store, "for god so loved the world")
+            .expect("stable dominant candidate promotes");
+        assert_eq!(s.item_id, "bible-kjv-john");
+        assert_eq!(s.section_key, "john.3.16");
+        assert!(s.preview.contains("God so loved"), "preview: {}", s.preview);
+        assert!(lm.promoted_key().is_some());
+    }
+
+    /// A top candidate that changes between partials resets the streak —
+    /// no live suggestion from an unstable ranking.
+    #[test]
+    fn live_matcher_resets_on_unstable_top() {
+        let store = crate::content::ContentStore::open_at(
+            std::env::temp_dir().join("bl-preview-test"),
+        )
+        .expect("open test store");
+        let mut lm = LiveMatcher::new();
+        lm.observe(&store, "the lord is my shepherd"); // streak 1 (Psalm 23)
+        assert!(
+            lm.observe(&store, "for god so loved the world").is_none(),
+            "top changed between partials must not promote"
+        );
     }
 
     #[test]
