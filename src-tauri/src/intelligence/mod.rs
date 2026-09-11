@@ -466,6 +466,27 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore]
+    fn bench_analyze_transcript() {
+        // Times the two matching paths against a fully seeded store:
+        // a spoken reference, and a no-reference sentence that triggers
+        // the expensive quotation phrase sweep.
+        let store = crate::content::ContentStore::open_at(
+            std::env::temp_dir().join("bl-preview-test"),
+        )
+        .expect("open test store");
+        let t0 = std::time::Instant::now();
+        let svc = std::sync::Arc::new(crate::session::ServiceState::new());
+        let r = analyze_transcript(&store, &svc, "Turn with me to John chapter three verse sixteen");
+        eprintln!("BENCH analyze(reference hit, {} sug): {:?}", r.len(), t0.elapsed());
+
+        let t0 = std::time::Instant::now();
+        let svc2 = std::sync::Arc::new(crate::session::ServiceState::new());
+        let r2 = analyze_transcript(&store, &svc2, "and we know that all things work together for good to them that love God");
+        eprintln!("BENCH analyze(quote sweep, {} sug): {:?}", r2.len(), t0.elapsed());
+    }
+
+    #[test]
     fn suggestion_carries_projected_text_preview() {
         // The operator must be able to verify the verse content before
         // pressing SHOW — the preview is that verse text, never empty for a

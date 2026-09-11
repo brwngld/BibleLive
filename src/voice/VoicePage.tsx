@@ -260,7 +260,7 @@ export default function VoicePage() {
               min="0.001"
               max="0.05"
               step="0.001"
-              value={config?.vadThreshold ?? 0.004}
+              value={config?.vadThreshold ?? 0.015}
               onChange={(e) =>
                 saveConfig({ vadThreshold: Number(e.currentTarget.value) })
               }

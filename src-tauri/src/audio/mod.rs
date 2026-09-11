@@ -60,7 +60,9 @@ pub struct VoiceConfig {
     pub device: Option<String>,
     /// "speech" (speech-only aux/bus) or "mixed" (full church mix).
     pub content_type: String,
-    /// Energy-gate RMS threshold (0.005 conservative … 0.001 sensitive).
+    /// Energy-gate RMS threshold on RAW (pre-gain) audio. Set it just above
+    /// your room's noise floor (the diagnostics report shows both numbers):
+    /// ~0.015 works for a typical quiet room with a normal speaking voice.
     pub vad_threshold: f32,
 }
 
@@ -69,7 +71,7 @@ impl Default for VoiceConfig {
         Self {
             device: None,
             content_type: "speech".into(),
-            vad_threshold: 0.004,
+            vad_threshold: 0.015,
         }
     }
 }
@@ -115,11 +117,27 @@ pub fn resample_to_16k(input: &[f32], in_rate: u32) -> Vec<f32> {
     out
 }
 
+/// Amplify a completed speech segment toward a healthy whisper input level.
+/// Applied AFTER voice detection (which gates on raw levels) so quiet mics
+/// still transcribe well without the noise floor ever being amplified past
+/// the gate.
+pub fn agc_boost_segment(seg: &mut [f32]) {
+    let peak = seg.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+    if peak > 0.0008 {
+        let gain = (0.70 / peak).min(60.0);
+        if gain > 1.01 {
+            for x in seg.iter_mut() {
+                *x *= gain;
+            }
+        }
+    }
+}
+
 // ---- Speech segmentation (energy VAD) ------------------------------------------
 
 const FRAME: usize = 480; // 30 ms @ 16 kHz
 const PREROLL_FRAMES: usize = 16; // ~0.5 s
-const END_SILENCE_FRAMES: usize = 40; // 1.2 s
+const END_SILENCE_FRAMES: usize = 24; // 0.72 s hangover before a segment closes
 const MIN_SPEECH_FRAMES: usize = 13; // ~0.4 s
 const MAX_SEGMENT_FRAMES: usize = 1000; // 30 s hard cap
 
@@ -472,31 +490,31 @@ where
                 .map(|s| <f32 as cpal::FromSample<T>>::from_sample_(*s))
                 .collect();
             let mono = mix_to_mono(&mono, channels);
-            let mut mono16 = resample_to_16k(&mono, in_rate);
+            let mono16 = resample_to_16k(&mono, in_rate);
 
-            // Automatic gain: quiet microphones (built-in laptop mics, some
-            // mixer feeds) sit far below the speech threshold. Track a slowly
-            // decaying peak and scale the signal toward a healthy level.
+            // Voice detection runs on RAW audio so the energy gate compares
+            // against the room's true noise floor. Boosting before the gate
+            // would amplify the noise floor past every threshold on the
+            // slider (the pre-fix behavior: continuous false "speech", CPU
+            // burned transcribing noise, real speech buried in mega-segments).
+            // Gain is tracked here but applied only to completed segments.
+            let chunk_peak = mono16.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+            let raw_rms =
+                (mono16.iter().map(|s| s * s).sum::<f32>() / mono16.len().max(1) as f32).sqrt();
             {
-                let chunk_peak = mono16.iter().fold(0.0f32, |m, x| m.max(x.abs()));
                 let mut peak = f32::from_bits(feed.agc_peak.load(Ordering::Relaxed));
                 peak = (peak.max(chunk_peak)) * 0.999;
                 feed.agc_peak.store(peak.to_bits(), Ordering::Relaxed);
-                if peak > 0.0008 {
-                    let gain = (0.70 / peak).min(60.0);
-                    feed.last_gain.store(gain.to_bits(), Ordering::Relaxed);
-                    if gain > 1.01 {
-                        for x in &mut mono16 {
-                            *x *= gain;
-                        }
-                    }
-                }
+                let gain = if peak > 0.0008 {
+                    (0.70 / peak).min(60.0)
+                } else {
+                    1.0
+                };
+                feed.last_gain.store(gain.to_bits(), Ordering::Relaxed);
+                // level meter shows the boosted view (bar moves on speech)
+                let shown = (raw_rms * gain).min(1.0);
+                feed.level.store(shown.to_bits(), Ordering::Relaxed);
             }
-
-            // level meter (RMS over this callback)
-            let rms = (mono16.iter().map(|s| s * s).sum::<f32>() / mono16.len().max(1) as f32)
-                .sqrt();
-            feed.level.store(rms.to_bits(), Ordering::Relaxed);
 
             // buffer into 30 ms frames and feed the segmenter
             let mut leftover = feed.leftover.lock();
@@ -504,7 +522,8 @@ where
             let mut segmenter = feed.segmenter.lock();
             while leftover.len() >= FRAME {
                 let frame: Vec<f32> = leftover.drain(..FRAME).collect();
-                if let Some(seg) = segmenter.feed(&frame) {
+                if let Some(mut seg) = segmenter.feed(&frame) {
+                    agc_boost_segment(&mut seg);
                     let _ = seg_tx.send(seg);
                 }
             }
@@ -522,6 +541,20 @@ pub fn latest_level(feed: &SharedFeed) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A quiet speech segment is amplified toward whisper's healthy input
+    /// level; a near-silent one is left alone (no noise multiplication).
+    #[test]
+    fn agc_boosts_quiet_segments_only() {
+        let mut quiet = vec![0.01f32; 4800];
+        agc_boost_segment(&mut quiet);
+        let peak = quiet.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        assert!(peak > 0.5 && peak <= 0.71, "peak should be ~0.7, got {peak}");
+
+        let mut silent = vec![0.0001f32; 4800];
+        agc_boost_segment(&mut silent);
+        assert!(silent.iter().all(|x| x.abs() <= 0.0001));
+    }
 
     /// A saved device name from another PC must fall back to the system
     /// default instead of hard-failing capture (PC-to-PC transfer case).

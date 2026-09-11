@@ -95,6 +95,28 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore]
+    fn bench_cpu_inference_5s_audio() {
+        // Measures pure CPU inference speed on THIS machine for each
+        // installed model, using 5 s of low-level noise as stand-in audio.
+        for name in ["ggml-tiny.en.bin", "ggml-base.en.bin"] {
+            let path = models_dir().join(name);
+            if !path.exists() {
+                eprintln!("BENCH {name}: model not present, skipped");
+                continue;
+            }
+            let engine = SttEngine::load(&path).expect("model loads");
+            let mut samples = vec![0.0f32; 16_000 * 5];
+            for (i, s) in samples.iter_mut().enumerate() {
+                *s = ((i % 97) as f32 / 97.0 - 0.5) * 0.01;
+            }
+            let t0 = std::time::Instant::now();
+            let _ = engine.transcribe(&samples).expect("inference runs");
+            eprintln!("BENCH {name}: 5.0s of audio transcribed in {:?}", t0.elapsed());
+        }
+    }
+
+    #[test]
     fn loads_model_and_transcribes_silence() {
         let path = default_model_path();
         if !path.exists() {
