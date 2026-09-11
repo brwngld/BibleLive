@@ -10,7 +10,7 @@ import {
   type SlotView,
 } from "./api";
 import * as lib from "../library/api";
-import type { ContentSummary, SearchHit } from "../library/types";
+import type { ContentItem, ContentSummary, SearchHit } from "../library/types";
 
 const HOTKEYS: [string, string][] = [
   ["Ctrl+Alt+1…5", "Select the active display"],
@@ -212,7 +212,7 @@ function SlotCard({
         </select>
       </label>
 
-      <div className="slot-row mode-row">
+      <div className="mode-row">
         {(["auto", "manual", "lock"] as const).map((m) => (
           <button
             key={m}
@@ -229,6 +229,26 @@ function SlotCard({
             {m.toUpperCase()}
           </button>
         ))}
+        <button
+          className={view.windowOpen ? "" : "primary"}
+          onClick={() =>
+            act(() =>
+              view.windowOpen
+                ? displayApi.closeOutput(view.slot)
+                : displayApi.openOutput(view.slot),
+            )
+          }
+        >
+          {view.windowOpen ? "◼ Close output" : "▶ Open output"}
+        </button>
+        {view.windowOpen && (
+          <button
+            title="Move this output to the next connected screen"
+            onClick={() => act(() => displayApi.moveToNextMonitor(view.slot))}
+          >
+            ⇄
+          </button>
+        )}
       </div>
 
       {/* Live preview — exactly what the output shows, scaled down */}
@@ -265,15 +285,19 @@ function SlotCard({
         )}
       </div>
 
-      <div className="slot-controls">
-        <button onClick={() => act(() => displayApi.step(view.slot, -1))}>◀ Prev</button>
-        <button onClick={() => act(() => displayApi.step(view.slot, 1))}>Next ▶</button>
+      <div className="slot-controls compact">
+        <button onClick={() => act(() => displayApi.step(view.slot, -1))}>◀</button>
+        <button onClick={() => act(() => displayApi.step(view.slot, 1))}>▶</button>
         <button onClick={() => act(() => displayApi.setBlank(view.slot, !view.blank))}>
           {view.blank ? "Unblank" : "Blank"}
         </button>
+        <button onClick={() => act(() => displayApi.setBlank(view.slot, true))}>⬛</button>
+        <button onClick={() => setShowStyle(!showStyle)}>
+          🔠 {showStyle ? "▲" : "▼"}
+        </button>
       </div>
 
-      <div className="slot-controls">
+      <div className="slot-controls compact">
         <button onClick={() => openPicker("scripture")}>📖 Scripture…</button>
         <button onClick={() => openPicker("lyrics")}>🎵 Lyrics…</button>
         <button
@@ -296,28 +320,6 @@ function SlotCard({
         >
           🖼 Media…
         </button>
-        <button onClick={() => act(() => displayApi.setBlank(view.slot, true))}>⬛ Black</button>
-      </div>
-
-      <div className="slot-controls">
-        <button onClick={() => setShowStyle(!showStyle)}>
-          🔠 Style {showStyle ? "▲" : "▼"}
-        </button>
-        {view.windowOpen ? (
-          <>
-            <button
-              title="Move this output to the next connected screen"
-              onClick={() => act(() => displayApi.moveToNextMonitor(view.slot))}
-            >
-              ⇄ Move screen
-            </button>
-            <button onClick={() => act(() => displayApi.closeOutput(view.slot))}>Close output</button>
-          </>
-        ) : (
-          <button className="primary" onClick={() => act(() => displayApi.openOutput(view.slot))}>
-            ▶ Open output
-          </button>
-        )}
       </div>
 
       {showStyle && (
@@ -382,11 +384,20 @@ function ContentPickerDialog({
   onClose: () => void;
   onPicked: () => void;
 }) {
+  const [tab, setTab] = useState<"search" | "browse">("browse");
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<ContentSummary[]>([]);
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [selected, setSelected] = useState<ContentSummary | null>(null);
   const [detail, setDetail] = useState<{ key: string; label: string }[]>([]);
+
+  // Browse state (scripture): version → book → chapter → verse.
+  const [allBooks, setAllBooks] = useState<ContentSummary[]>([]);
+  const [browseVersion, setBrowseVersion] = useState("KJV");
+  const [browseBookId, setBrowseBookId] = useState<string | null>(null);
+  const [browseBook, setBrowseBook] = useState<ContentItem | null>(null);
+  const [browseChapter, setBrowseChapter] = useState(1);
+  const [browseVerse, setBrowseVerse] = useState(1);
 
   useEffect(() => {
     if (kind === "lyrics") {
@@ -394,8 +405,52 @@ function ContentPickerDialog({
         setItems(r);
         lib.listContent({ itemType: "song" }).then((s) => setItems((prev) => [...prev, ...s]));
       });
+    } else {
+      lib
+        .listContent({ itemType: "bible", sort: "canonical" })
+        .then((r) => {
+          setAllBooks(r);
+          const first = r.find((b) => b.title.endsWith("(KJV)")) ?? r[0];
+          if (first) setBrowseBookId(first.id);
+        })
+        .catch(console.error);
     }
   }, [kind]);
+
+  // Load the chosen book to populate chapters/verses.
+  useEffect(() => {
+    if (kind !== "scripture" || !browseBookId) return;
+    lib.getContent(browseBookId).then((b) => {
+      setBrowseBook(b);
+      setBrowseChapter(1);
+      setBrowseVerse(1);
+    }).catch(console.error);
+  }, [browseBookId, kind]);
+
+  const bookChapters: string[][] = browseBook?.body.chapters ?? [];
+  const bookVersions = Array.from(
+    new Set(allBooks.map((b) => (b.title.match(/\(([^)]+)\)$/)?.[1] ?? "KJV"))),
+  );
+  const booksOfVersion = allBooks.filter((b) =>
+    b.title.endsWith(`(${browseVersion})`),
+  );
+  const browseItem = (() => {
+    if (!browseBook) return null;
+    const base = browseBook.id.replace(/^bible-[a-z0-9]+-/, "");
+    return { slug: base, key: `bible-${browseVersion.toLowerCase()}-${base}` };
+  })();
+
+  async function showBrowseVerse() {
+    if (!browseItem) return;
+    try {
+      await displayApi.setScripture(slot, browseItem.key, [
+        `${browseItem.slug}.${browseChapter}.${browseVerse}`,
+      ]);
+      onPicked();
+    } catch (e) {
+      alert(String(e));
+    }
+  }
 
   async function runSearch() {
     if (kind === "scripture") {
@@ -449,49 +504,143 @@ function ContentPickerDialog({
         <h2>
           {kind === "scripture" ? "📖 Scripture" : "🎵 Lyrics"} → Display {slot}
         </h2>
-        <div className="search-box">
-          <input
-            autoFocus
-            value={query}
-            onChange={(e) => setQuery(e.currentTarget.value)}
-            onKeyDown={(e) => e.key === "Enter" && runSearch()}
-            placeholder={
-              kind === "scripture"
-                ? "Reference or words… e.g. John 3:16 / for God so loved"
-                : "Search hymns & songs…"
-            }
-          />
-          <button onClick={runSearch}>Search</button>
-        </div>
-
-        <div className="picker-list">
-          {kind === "scripture" &&
-            hits.map((h) => (
-              <button key={h.itemId + h.sectionKey} className="hit-row" onClick={() => choose(h)}>
-                <b>{h.sectionLabel}</b> <span className="muted">{h.itemTitle}</span>
-                <div className="hit-snippet" dangerouslySetInnerHTML={{ __html: h.snippet }} />
-              </button>
-            ))}
-          {kind === "lyrics" &&
-            !selected &&
-            items.map((i) => (
-              <button key={i.id} className="hit-row" onClick={() => selectItem(i)}>
-                <b>{i.title}</b> <span className="muted">{i.itemType}</span>
-              </button>
-            ))}
-          {kind === "lyrics" &&
-            selected &&
-            detail.map((d) => (
-              <button key={d.key} className="hit-row" onClick={() => choose(undefined, d.key)}>
-                <b>{d.label}</b>
-              </button>
-            ))}
-          {kind === "lyrics" && selected && (
-            <button className="muted" onClick={() => setSelected(null)}>
-              ← back to song list
+        {kind === "scripture" && (
+          <div className="type-tabs">
+            <button className={tab === "browse" ? "active" : ""} onClick={() => setTab("browse")}>
+              Browse by reference
             </button>
-          )}
-        </div>
+            <button className={tab === "search" ? "active" : ""} onClick={() => setTab("search")}>
+              Search
+            </button>
+          </div>
+        )}
+
+        {kind === "scripture" && tab === "browse" ? (
+          <div className="browse-picker">
+            <div className="field-row">
+              <label>
+                Version
+                <select
+                  value={browseVersion}
+                  onChange={(e) => {
+                    const v = e.currentTarget.value;
+                    setBrowseVersion(v);
+                    const first = allBooks.find((b) => b.title.endsWith(`(${v})`));
+                    if (first) setBrowseBookId(first.id);
+                  }}
+                >
+                  {bookVersions.map((v) => (
+                    <option key={v} value={v}>
+                      {v}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Book
+                <select
+                  value={browseBookId ?? ""}
+                  onChange={(e) => setBrowseBookId(e.currentTarget.value)}
+                >
+                  {booksOfVersion.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.title.replace(/\s*\([^)]*\)$/, "")}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="field-row">
+              <label>
+                Chapter
+                <select
+                  value={browseChapter}
+                  onChange={(e) => {
+                    setBrowseChapter(Number(e.currentTarget.value));
+                    setBrowseVerse(1);
+                  }}
+                >
+                  {bookChapters.map((_, i) => (
+                    <option key={i + 1} value={i + 1}>
+                      {i + 1}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Verse
+                <select
+                  value={Math.min(browseVerse, (bookChapters[browseChapter - 1] ?? []).length)}
+                  onChange={(e) => setBrowseVerse(Number(e.currentTarget.value))}
+                >
+                  {(bookChapters[browseChapter - 1] ?? []).map((_, i) => (
+                    <option key={i + 1} value={i + 1}>
+                      {i + 1}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="browse-preview muted">
+              {browseBook
+                ? `${browseBook.metadata.book ?? ""} ${browseChapter}:${browseVerse} — ${
+                    (bookChapters[browseChapter - 1] ?? [])[browseVerse - 1] ?? ""
+                  }`
+                : "Loading…"}
+            </div>
+            <div className="form-actions">
+              <button className="primary" disabled={!browseBook} onClick={showBrowseVerse}>
+                Show on display
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="search-box">
+              <input
+                autoFocus
+                value={query}
+                onChange={(e) => setQuery(e.currentTarget.value)}
+                onKeyDown={(e) => e.key === "Enter" && runSearch()}
+                placeholder={
+                  kind === "scripture"
+                    ? "Reference or words… e.g. John 3:16 / for God so loved"
+                    : "Search hymns & songs…"
+                }
+              />
+              <button onClick={runSearch}>Search</button>
+            </div>
+
+            <div className="picker-list">
+              {kind === "scripture" &&
+                hits.map((h) => (
+                  <button key={h.itemId + h.sectionKey} className="hit-row" onClick={() => choose(h)}>
+                    <b>{h.sectionLabel}</b> <span className="muted">{h.itemTitle}</span>
+                    <div className="hit-snippet" dangerouslySetInnerHTML={{ __html: h.snippet }} />
+                  </button>
+                ))}
+              {kind === "lyrics" &&
+                !selected &&
+                items.map((i) => (
+                  <button key={i.id} className="hit-row" onClick={() => selectItem(i)}>
+                    <b>{i.title}</b> <span className="muted">{i.itemType}</span>
+                  </button>
+                ))}
+              {kind === "lyrics" &&
+                selected &&
+                detail.map((d) => (
+                  <button key={d.key} className="hit-row" onClick={() => choose(undefined, d.key)}>
+                    <b>{d.label}</b>
+                  </button>
+                ))}
+              {kind === "lyrics" && selected && (
+                <button className="muted" onClick={() => setSelected(null)}>
+                  ← back to song list
+                </button>
+              )}
+            </div>
+          </>
+        )}
 
         <div className="form-actions">
           <button onClick={onClose}>Cancel</button>

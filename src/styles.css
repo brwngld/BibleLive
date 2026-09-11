@@ -965,3 +965,46 @@ input[type="color"] {
 }
 .anim-fade { animation: reader-fade 0.35s ease-out; }
 .anim-slide { animation: reader-slide 0.3s ease-out; }
+
+/* ---- Display slot compaction ---- */
+.slot-card .mode-row {
+  display: flex;
+  flex-direction: row;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.slot-card .mode-row button {
+  flex: 0 0 auto;
+  padding: 4px 10px;
+}
+.slot-controls.compact {
+  gap: 5px;
+}
+.slot-controls.compact button {
+  font-size: 0.88em;
+  padding: 4px 9px;
+}
+.slot-controls.compact button:first-child {
+  margin-left: 0;
+}
+.browse-picker .field-row {
+  display: flex;
+  gap: 12px;
+}
+.browse-picker .field-row label {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.85em;
+  color: #94a3b8;
+}
+.browse-preview {
+  margin: 10px 0;
+  padding: 8px 10px;
+  background: #0f172a;
+  border-radius: 8px;
+  line-height: 1.5;
+  max-height: 96px;
+  overflow: auto;
+}
