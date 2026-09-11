@@ -338,6 +338,21 @@ impl Segmenter {
     }
 }
 
+/// Longest slice of an ongoing utterance a live partial carries. Re-sending
+/// the whole utterance every window made each partial more expensive than
+/// the last (a 15 s monologue ≈ 8 s of CPU per partial on a modest machine),
+/// so partials queued up faster than they could run. The tail keeps live
+/// text fresh at constant cost; the Final still carries everything.
+pub const PARTIAL_TAIL_SAMPLES: usize = 160_000; // 10 s @ 16 kHz
+
+/// Keep only the tail of a partial buffer (whole thing if under the cap).
+pub fn partial_tail(buf: Vec<f32>) -> Vec<f32> {
+    if buf.len() <= PARTIAL_TAIL_SAMPLES {
+        return buf;
+    }
+    buf[buf.len() - PARTIAL_TAIL_SAMPLES..].to_vec()
+}
+
 // ---- Capture manager ------------------------------------------------------------
 
 /// cpal's Stream is !Send on some platforms, so it must be owned by a single
@@ -833,6 +848,17 @@ mod tests {
         c.partial_window_ms = 9000;
         c.validate();
         assert_eq!(c.partial_window_ms, 4000);
+    }
+
+    /// Long utterances are trimmed to the partial tail; short ones pass
+    /// through whole.
+    #[test]
+    fn partial_tail_trims_to_cap() {
+        assert_eq!(partial_tail(vec![1.0; 100]).len(), 100);
+        let long = vec![0.5f32; PARTIAL_TAIL_SAMPLES + 50_000];
+        let out = partial_tail(long);
+        assert_eq!(out.len(), PARTIAL_TAIL_SAMPLES);
+        assert!(out.first().is_some_and(|x| *x == 0.5));
     }
 
     /// A saved device name from another PC must fall back to the system

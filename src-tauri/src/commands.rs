@@ -979,6 +979,7 @@ use crate::intelligence::{self, Suggestion};
 use crate::session::{ListenMode, ServiceState};
 use crate::stt::SttEngine;
 use parking_lot::Mutex;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
@@ -1158,6 +1159,10 @@ pub async fn start_listening(
 
     let app_for_level = app.clone();
     let live = Arc::new(Mutex::new(intelligence::LiveMatcher::new()));
+    // One partial in flight at a time: on a CPU slower than the window, a
+    // growing queue of stale partials delayed everything. A new partial is
+    // dropped when one is still running — the next carries newer text.
+    let partial_busy = Arc::new(std::sync::atomic::AtomicBool::new(false));
     mgr.start(
         &config,
         move |ev| {
@@ -1166,13 +1171,30 @@ pub async fn start_listening(
         let store = store_clone.clone();
         let service = service_clone.clone();
         let live = live.clone();
+        let busy = partial_busy.clone();
         // Transcribe off the audio-forwarding thread.
         std::thread::spawn(move || {
             let is_final = matches!(ev, audio::AudioEvent::Final(_));
             let samples = match ev {
                 audio::AudioEvent::Partial(buf) | audio::AudioEvent::Final(buf) => buf,
             };
-            match engine.transcribe(&samples) {
+            if !is_final
+                && busy
+                    .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+                    .is_err()
+            {
+                return; // previous partial still transcribing — drop this one
+            }
+            let samples = if is_final {
+                samples
+            } else {
+                audio::partial_tail(samples)
+            };
+            let result = engine.transcribe(&samples);
+            if !is_final {
+                busy.store(false, Ordering::Relaxed);
+            }
+            match result {
                 Ok(text) if !text.is_empty() => {
                     if is_final {
                         // Final, pause-verified transcript: full matching.

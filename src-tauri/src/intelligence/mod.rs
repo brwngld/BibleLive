@@ -388,8 +388,17 @@ pub fn match_quote_candidates(
     }
     let max_len = words.len().min(14);
     let mut best: Vec<(SearchHit, f32)> = Vec::new();
-    for len in (4..=max_len).rev() {
-        for start in 0..=(words.len() - len) {
+    // Query budget: partials arrive every couple of seconds; a full phrase
+    // sweep on a long utterance costs seconds of FTS. Suffix phrases carry
+    // the newest words, so they go first and the budget stops the rest.
+    let mut queries = 0usize;
+    const MAX_QUERIES: usize = 12;
+    'outer: for len in (4..=max_len).rev() {
+        for start in (0..=(words.len() - len)).rev() {
+            if queries >= MAX_QUERIES {
+                break 'outer;
+            }
+            queries += 1;
             let phrase = words[start..start + len].join(" ");
             let fts = format!("\"{}\"", phrase.replace('\'', "''"));
             let Ok(hits) = store.search_phrase(&fts, 4) else {
