@@ -906,3 +906,62 @@ input[type="color"] {
   white-space: pre-wrap;
   word-break: break-all;
 }
+
+/* ---- Bible reader ---- */
+.bible-reader {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.reader-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.reader-toolbar select {
+  max-width: 220px;
+}
+.reader-position {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.reader-anim {
+  margin-left: auto;
+  font-size: 0.9em;
+  opacity: 0.85;
+}
+.reader-chapter {
+  overflow-y: auto;
+}
+.reader-chapter h3 {
+  margin: 4px 0 12px;
+  font-size: 1.15em;
+  color: #93c5fd;
+}
+.reader-verses {
+  line-height: 1.85;
+  font-size: 1.02em;
+}
+.reader-verses sup {
+  color: #64748b;
+  font-size: 0.72em;
+  margin-right: 2px;
+}
+.reader-verses .verse-focus {
+  background: #3b82f633;
+  border-radius: 4px;
+  padding: 1px 2px;
+}
+/* chapter-change animations (configurable in the reader toolbar) */
+@keyframes reader-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes reader-slide {
+  from { opacity: 0; transform: translateX(24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.anim-fade { animation: reader-fade 0.35s ease-out; }
+.anim-slide { animation: reader-slide 0.3s ease-out; }

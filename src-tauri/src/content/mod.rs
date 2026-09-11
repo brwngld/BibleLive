@@ -107,7 +107,7 @@ impl ContentStore {
     /// by profile handling).
     pub fn open_at(dir: PathBuf) -> Result<Self, ContentError> {
         std::fs::create_dir_all(&dir)?;
-        let conn = Connection::open(dir.join("biblelive.db"))?;
+        let mut conn = Connection::open(dir.join("biblelive.db"))?;
 
         // Pre-M1 databases shipped a different search_fts shape; rebuild it.
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -116,7 +116,26 @@ impl ContentStore {
         }
 
         conn.execute_batch(SCHEMA)?;
-        conn.execute_batch("PRAGMA user_version = 1;")?;
+
+        // Bundled Bible text changed (corrected KJV + ASV added): refresh the
+        // seeded Bibles in databases older than the current text version.
+        // User content and hymns are untouched.
+        if version > 0 && version < seed::BIBLE_TEXT_VERSION {
+            conn.execute(
+                "DELETE FROM search_index WHERE item_id LIKE 'bible-%'",
+                [],
+            )?;
+            conn.execute("DELETE FROM search_fts WHERE item_id LIKE 'bible-%'", [])?;
+            conn.execute("DELETE FROM content_items WHERE id LIKE 'bible-%'", [])?;
+            let tx = conn.transaction()?;
+            seed::seed_bibles(&tx)?;
+            tx.commit()?;
+        }
+
+        conn.execute_batch(&format!(
+            "PRAGMA user_version = {};",
+            seed::BIBLE_TEXT_VERSION.max(1)
+        ))?;
         let store = Self {
             conn: Arc::new(parking_lot::Mutex::new(conn)),
         };
@@ -620,14 +639,20 @@ mod tests {
     fn seeds_and_searches_bundled_library() {
         let store = test_store("seed");
         let stats = store.stats().unwrap();
-        assert_eq!(stats["total"], serde_json::json!(78)); // 66 KJV books + 12 hymns
+        // 66 KJV + 66 ASV books + 12 hymns.
+        assert_eq!(stats["total"], serde_json::json!(144));
 
-        // Exact quotation should find John 3:16.
+        // Exact quotation should find John 3:16 in BOTH translations.
         let hits = store.search("For God so loved the world", 10).unwrap();
         assert!(
             hits.iter()
-                .any(|h| h.section_key == "john.3.16" && h.item_title.starts_with("John")),
-            "expected John 3:16 in {hits:?}"
+                .any(|h| h.section_key == "john.3.16" && h.item_title.ends_with("(KJV)")),
+            "expected KJV John 3:16 in {hits:?}"
+        );
+        assert!(
+            hits.iter()
+                .any(|h| h.section_key == "john.3.16" && h.item_title.ends_with("(ASV)")),
+            "expected ASV John 3:16 in {hits:?}"
         );
 
         // Hymn search across content types.
@@ -644,28 +669,35 @@ mod tests {
         let store = test_store("order");
         let bible = model::ItemType::Bible;
 
-        // Canonical: Genesis first, Revelation last.
-        let items = store.list_items(Some(&bible), None, None, "canonical", 100, 0).unwrap();
-        assert_eq!(items.first().unwrap().title, "Genesis (KJV)");
+        // Canonical: per bookNumber, ASV before KJV (title tiebreak);
+        // Genesis first, Revelation (KJV) last.
+        let items = store.list_items(Some(&bible), None, None, "canonical", 200, 0).unwrap();
+        assert_eq!(items.len(), 132); // 66 books × 2 translations
+        assert_eq!(items.first().unwrap().title, "Genesis (ASV)");
+        assert_eq!(items[1].title, "Genesis (KJV)");
         assert_eq!(items.last().unwrap().title, "Revelation (KJV)");
-        // Matthew should be first book of the New Testament.
-        let matthew_pos = items.iter().position(|i| i.title == "Matthew (KJV)").unwrap();
-        assert_eq!(matthew_pos, 39);
+        // Matthew (book 40) pairs start at index 78; each book is adjacent.
+        let matthew = items
+            .iter()
+            .position(|i| i.title == "Matthew (ASV)")
+            .unwrap();
+        assert_eq!(matthew, 78);
+        assert_eq!(items[matthew + 1].title, "Matthew (KJV)");
 
-        // Old Testament: 39 books, Genesis in, Matthew out.
-        let ot = store.list_items(Some(&bible), None, Some("ot"), "canonical", 100, 0).unwrap();
-        assert_eq!(ot.len(), 39);
+        // Old Testament: 39 books × 2, Genesis in, Matthew out.
+        let ot = store.list_items(Some(&bible), None, Some("ot"), "canonical", 200, 0).unwrap();
+        assert_eq!(ot.len(), 78);
         assert!(ot.iter().any(|i| i.title == "Genesis (KJV)"));
         assert!(!ot.iter().any(|i| i.title == "Matthew (KJV)"));
 
-        // New Testament: 27 books, Matthew in, Malachi out.
-        let nt = store.list_items(Some(&bible), None, Some("nt"), "canonical", 100, 0).unwrap();
-        assert_eq!(nt.len(), 27);
+        // New Testament: 27 books × 2, Matthew in, Malachi out.
+        let nt = store.list_items(Some(&bible), None, Some("nt"), "canonical", 200, 0).unwrap();
+        assert_eq!(nt.len(), 54);
         assert!(nt.iter().any(|i| i.title == "Matthew (KJV)"));
         assert!(!nt.iter().any(|i| i.title == "Malachi (KJV)"));
 
         // Title descending sorts Z→A.
-        let desc = store.list_items(Some(&bible), None, None, "title-desc", 100, 0).unwrap();
+        let desc = store.list_items(Some(&bible), None, None, "title-desc", 200, 0).unwrap();
         assert!(desc[0].title.as_str() > desc[1].title.as_str());
     }
 

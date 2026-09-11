@@ -1,5 +1,6 @@
-//! Bundled library seeding: KJV Bible + public-domain hymn collection.
-//! Runs once on first launch (when the content database is empty).
+//! Bundled library seeding: KJV + ASV Bibles + public-domain hymn collection.
+//! Runs once on first launch (when the content database is empty), and the
+//! Bible half re-runs when the bundled text is newer than the seeded one.
 
 use super::model::{slugify, strip_braces, ContentItem, ItemType};
 use super::ContentError;
@@ -10,14 +11,21 @@ const KJV_JSON: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../resources/kjv.json"
 ));
+const ASV_JSON: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../resources/asv.json"
+));
 const HYMNS_JSON: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../resources/hymns.json"
 ));
 
+/// Bump when the bundled Bible text changes materially; existing databases
+/// re-seed their Bibles (hymns and user content untouched).
+pub const BIBLE_TEXT_VERSION: i64 = 2;
+
 #[derive(serde::Deserialize)]
 struct KjvBook {
-    #[serde(rename = "name")]
     name: String,
     #[serde(default)]
     chapters: Vec<Vec<String>>,
@@ -38,14 +46,15 @@ fn default_language() -> String {
     "en".to_string()
 }
 
-/// Seed the KJV — one content item per book (66 items), every verse indexed.
-pub fn seed_kjv(tx: &Transaction) -> Result<(), ContentError> {
-    let text = KJV_JSON.trim_start_matches('\u{feff}');
+/// Seed one Bible translation — one content item per book (66 items), every
+/// verse indexed.
+fn seed_bible(tx: &Transaction, file: &str, translation: &str) -> Result<(), ContentError> {
+    let text = file.trim_start_matches('\u{feff}');
     let books: Vec<KjvBook> = serde_json::from_str(text)?;
 
     for (book_num, book) in books.iter().enumerate() {
         let slug = slugify(&book.name);
-        let id = format!("bible-kjv-{}", slug);
+        let id = format!("bible-{}-{}", translation.to_lowercase(), slug);
         let chapters: Vec<Vec<String>> = book
             .chapters
             .iter()
@@ -56,17 +65,17 @@ pub fn seed_kjv(tx: &Transaction) -> Result<(), ContentError> {
         let item = ContentItem {
             id: id.clone(),
             item_type: ItemType::Bible,
-            title: format!("{} (KJV)", book.name),
+            title: format!("{} ({})", book.name, translation),
             language: "en".to_string(),
             license: "public-domain".to_string(),
             visibility: "public".to_string(),
             metadata: json!({
-                "translation": "KJV",
+                "translation": translation,
                 "book": book.name,
                 "bookNumber": book_num + 1,
             }),
             body: json!({
-                "translation": "KJV",
+                "translation": translation,
                 "book": book.name,
                 "chapters": chapters,
             }),
@@ -105,6 +114,18 @@ pub fn seed_kjv(tx: &Transaction) -> Result<(), ContentError> {
     }
 
     Ok(())
+}
+
+/// Seed both bundled translations.
+pub fn seed_bibles(tx: &Transaction) -> Result<(), ContentError> {
+    seed_bible(tx, KJV_JSON, "KJV")?;
+    seed_bible(tx, ASV_JSON, "ASV")?;
+    Ok(())
+}
+
+/// Legacy entry point (empty database): bibles + hymns.
+pub fn seed_kjv(tx: &Transaction) -> Result<(), ContentError> {
+    seed_bibles(tx)
 }
 
 /// Seed the public-domain hymn collection.

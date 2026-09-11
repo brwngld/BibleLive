@@ -342,7 +342,12 @@ pub fn match_quote(store: &ContentStore, text: &str) -> Option<(SearchHit, f32)>
         for start in 0..=(words.len() - len) {
             let phrase = words[start..start + len].join(" ");
             let fts = format!("\"{}\"", phrase.replace('\'', "''"));
-            let hits = store.search_phrase(&fts, 3).ok()?;
+            let Ok(mut hits) = store.search_phrase(&fts, 6) else {
+                continue;
+            };
+            // Prefer the KJV rendering when a verse exists in several
+            // translations — matching is KJV-first by design.
+            hits.sort_by_key(|h| !h.item_id.starts_with("bible-kjv-"));
             for hit in hits {
                 // Verify the phrase truly appears in the stored text
                 // (FTS porter stemming can over-match; keep it strict).
@@ -401,9 +406,14 @@ pub fn match_quote_candidates(
             queries += 1;
             let phrase = words[start..start + len].join(" ");
             let fts = format!("\"{}\"", phrase.replace('\'', "''"));
-            let Ok(hits) = store.search_phrase(&fts, 4) else {
+            let Ok(mut hits) = store.search_phrase(&fts, 6) else {
                 continue;
             };
+            // Same scripture in another translation is not a rival — the
+            // dominance rule compares scriptures, not renderings. Prefer the
+            // KJV (the matching default) when both are present.
+            hits.sort_by_key(|h| !h.item_id.starts_with("bible-kjv-"));
+            hits.dedup_by(|a, b| a.section_key == b.section_key);
             // Distinctiveness gate: a phrase living in many sections
             // identifies nothing — skip it for live suggestions.
             if hits.len() > 3 {
