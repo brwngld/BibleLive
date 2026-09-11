@@ -1216,6 +1216,9 @@ pub async fn start_listening(
                             }
                             lm.retire();
                         }
+                        // Next utterance starts fresh: verses decided on
+                        // during this one may be suggested again later.
+                        service.clear_utterance_suppressions();
                     } else {
                         // Rolling partial: live transcript + progressive
                         // Scripture matching with confidence/stability gating.
@@ -1499,8 +1502,10 @@ pub fn respond_suggestion(
     id: String,
     show: bool,
 ) -> Result<Suggestion, String> {
+    // resolve (not just set) — an operator decision also suppresses the
+    // verse for the rest of this utterance.
     service
-        .set_suggestion_status(&id, if show { "shown" } else { "ignored" })
+        .resolve_suggestion(&id, if show { "shown" } else { "ignored" })
         .ok_or_else(|| format!("suggestion {id} not found"))
 }
 

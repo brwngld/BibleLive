@@ -44,6 +44,10 @@ pub struct ServiceState {
     suggestions: Mutex<VecDeque<Suggestion>>,
     next_id: Mutex<u64>,
     current: Mutex<Option<SessionMeta>>,
+    /// Verses the operator decided on (shown/ignored) during the CURRENT
+    /// utterance. Cleared when the next utterance begins, so a decision
+    /// settles that mention without blacklisting the verse for the service.
+    suppressed: Mutex<std::collections::HashSet<(String, String)>>,
 }
 
 impl ServiceState {
@@ -53,6 +57,7 @@ impl ServiceState {
             suggestions: Mutex::new(VecDeque::new()),
             next_id: Mutex::new(1),
             current: Mutex::new(None),
+            suppressed: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -92,17 +97,40 @@ impl ServiceState {
         s
     }
 
+    /// Operator decision: set a card's status AND remember the verse as
+    /// decided for the current utterance (no re-suggesting this mention).
+    pub fn resolve_suggestion(&self, id: &str, status: &str) -> Option<Suggestion> {
+        let mut q = self.suggestions.lock();
+        let s = q.iter_mut().rev().find(|s| s.id == id)?;
+        s.status = status.to_string();
+        let key = (s.item_id.clone(), s.section_key.clone());
+        let out = s.clone();
+        drop(q);
+        if status == "shown" || status == "ignored" {
+            self.suppressed.lock().insert(key);
+        }
+        Some(out)
+    }
+
+    /// A new utterance begins: verses decided on during the previous one
+    /// become suggestible again (the preacher may return to them later).
+    pub fn clear_utterance_suppressions(&self) {
+        self.suppressed.lock().clear();
+    }
+
     /// Insert or refresh: a live (partial-transcript) suggestion replaces
     /// the pending card for the same content instead of stacking duplicate
-    /// cards as the match strengthens. Once the operator has decided on a
-    /// verse (shown/ignored), it is never re-suggested → None suppresses.
+    /// cards as the match strengthens. Verses the operator decided on during
+    /// this utterance are suppressed → None.
     pub fn upsert_suggestion(&self, s: Suggestion) -> Option<Suggestion> {
-        let mut q = self.suggestions.lock();
-        if q.iter().any(|e| {
-            e.item_id == s.item_id && e.section_key == s.section_key && e.status != "pending"
-        }) {
-            return None; // already decided — do not nag
+        if self
+            .suppressed
+            .lock()
+            .contains(&(s.item_id.clone(), s.section_key.clone()))
+        {
+            return None; // decided this utterance — do not nag
         }
+        let mut q = self.suggestions.lock();
         if let Some(existing) = q.iter_mut().rev().find(|e| {
             e.status == "pending" && e.item_id == s.item_id && e.section_key == s.section_key
         }) {
@@ -157,23 +185,34 @@ mod tests {
     }
 
     /// Once the operator shows or ignores a verse, later partials for the
-    /// same verse must not raise a new card.
+    /// same verse must not raise a new card — until the next utterance,
+    /// where the preacher may legitimately return to it.
     #[test]
-    fn resolved_suggestions_are_not_resuggested() {
+    fn decided_verses_return_next_utterance() {
         let service = ServiceState::new();
         let first = service
             .upsert_suggestion(sug("bible-kjv-john", "john.3.16"))
             .expect("first card is created");
-        service.set_suggestion_status(&first.id, "shown").unwrap();
+        service
+            .resolve_suggestion(&first.id, "shown")
+            .unwrap();
 
+        // Decided this utterance → suppressed.
         assert!(
             service.upsert_suggestion(sug("bible-kjv-john", "john.3.16")).is_none(),
-            "decided verse must be suppressed"
+            "decided verse must be quiet for the rest of this utterance"
         );
-        // A different verse still flows through.
+        // Other verses still flow through.
         assert!(service
             .upsert_suggestion(sug("bible-kjv-psalm", "psalm.23.1"))
             .is_some());
+
+        // The preacher returns to the verse later in the service → fresh card.
+        service.clear_utterance_suppressions();
+        assert!(
+            service.upsert_suggestion(sug("bible-kjv-john", "john.3.16")).is_some(),
+            "a new utterance must be able to re-suggest the verse"
+        );
     }
 
     /// A pending card for the same verse is refreshed in place, not duplicated.
