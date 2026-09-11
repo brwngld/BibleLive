@@ -22,6 +22,41 @@ full-text index. The AI only ever *matches* existing content; it never
 generates Scripture. Suggestions become display content only through the
 Manual → Assisted → Automatic approval chain.
 
+## Voice recognition models (offline whisper)
+
+The app transcribes with vendored [whisper.cpp](https://github.com/ggml-org/whisper.cpp)
+models stored in `%APPDATA%\BibleLive\models\`. **Base and Tiny ship inside the
+installer** and are copied there automatically on first run — nothing to
+download for normal use. Switch between them in **Voice → Audio Setup →
+Transcription model**.
+
+| Model | File / size | Speed¹ (per 5 s of speech) | Accuracy expectation | Real-time needs |
+|---|---|---|---|---|
+| **Tiny** (bundled) | `ggml-tiny.en.bin` · 78 MB | **~2.6 s** | Often garbles Scripture ("God said" → "got saved") | Any 2+ core x64 CPU |
+| **Base** (bundled, default) | `ggml-base.en.bin` · 148 MB | **~5.3 s** | Good — close to word-perfect at normal speaking distance | 4+ physical cores (AVX2) to feel instant |
+| Small | `ggml-small.en.bin` · 466 MB | ~18 s (est.) | Noticeably better than Base | 6–8 modern cores |
+| Medium | `ggml-medium.en.bin` · 1.5 GB | ~55 s (est.) | Very good | 8+ fast cores / workstation |
+| Large-v3 | `ggml-large-v3.bin` · 3.1 GB | ~110 s (est.) | Best available | GPU only |
+| Large-v3-Turbo | `ggml-large-v3-turbo.bin` · 1.6 GB | ~3–4× faster than Large (est.) | Near-Large quality | GPU recommended |
+
+¹ Measured on this project's dev machine (2-core/4-thread i7-4610M, CPU-only).
+Speed scales roughly with model size × CPU cores; larger entries are
+estimates from parameter counts. The current build is CPU-only — GPU
+(Vulkan) acceleration can be added later for large models.
+
+**Downloads:** all `ggml-*.bin` files come from the official
+[whisper.cpp models repository on Hugging Face](https://huggingface.co/ggerganov/whisper.cpp/tree/main)
+(e.g. [`ggml-base.en.bin`](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin),
+[`ggml-small.en.bin`](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin)).
+To try one, place the file in `%APPDATA%\BibleLive\models\` — the in-app
+selector currently offers Base and Tiny; other sizes are listed here for
+hardware planning and can be wired in on request.
+
+**Choosing for your hardware:** 2-core PC → Tiny (fast) or Base (accurate,
+~4 s wait after you stop speaking). 4+ core PC (typical church desktop) →
+Base feels instant. Strong desktop / any discrete GPU → the bigger models
+become practical.
+
 ## Hotkeys (work system-wide)
 
 | Keys | Action |
@@ -51,7 +86,7 @@ Tests (content engine, ordering, importers, reference parser, whisper FFI,
 display manager, profiles):
 
 ```bash
-cd src-tauri && cargo test    # 14 tests
+cd src-tauri && cargo test    # 17 tests (+#2 ignored CPU benchmarks)
 ```
 
 ### Project structure
@@ -73,18 +108,18 @@ docs/                 architecture, decisions, roadmap, install guides
 
 ## Installing on another PC
 
-Everything a church PC needs — installer, offline WebView2 runtime, voice
-model, one-click setup script, and the user manual — is assembled by:
+Everything a church PC needs is inside the installers produced by:
 
 ```bash
-npx tauri build
-python make_portable_zip.py        # (portable *source* copy, not the installer)
+npx tauri build        # NSIS setup + MSI under src-tauri/target/release/bundle/
 ```
 
-The all-in-one installer folder is assembled under `release/BibleLive-FullSetup/`
-(installer + `MicrosoftEdgeWebView2RuntimeInstallerX64.exe` + `ggml-*.bin`
-model + `Install-BibleLive.cmd`). Run that script on the target PC and it
-installs WebView2 (if missing), the app, and the voice model in one click.
+The installer carries the app, both voice models (Base + Tiny, copied into
+`%APPDATA%\BibleLive\models\` automatically on first launch), and the full
+bundled KJV/hymn library — no internet, downloads, or manual file copying on
+the target PC. `make_portable_zip.py` still produces a portable *source*
+copy for development machines.
+
 Details: [docs/INSTALL.md](docs/INSTALL.md) and the user manual
 ([BibleLive-User-Manual.pdf](BibleLive-User-Manual.pdf)).
 
@@ -105,7 +140,7 @@ diagnostics button produces a full audio-path report.
 ## Status
 
 **v0.1.0 — milestones M0–M5 complete** (content, displays, voice,
-intelligence, live service control). 14/14 tests passing.
+intelligence, live service control). 17/17 tests passing.
 
 Next (M6+): phone companion app over the church LAN (remote control, then
 phone-as-microphone), user roles, private-content access control, more
