@@ -1225,14 +1225,15 @@ pub async fn start_listening(
                         );
                         let mut lm = live.lock();
                         if let Some(s) = lm.observe(&store, &text) {
-                            let s = service.upsert_suggestion(s);
-                            let _ = app.emit(
-                                "voice-suggestion",
-                                SuggestionPayload {
-                                    suggestion: s,
-                                    mode: service.mode().as_str().to_string(),
-                                },
-                            );
+                            if let Some(s) = service.upsert_suggestion(s) {
+                                let _ = app.emit(
+                                    "voice-suggestion",
+                                    SuggestionPayload {
+                                        suggestion: s,
+                                        mode: service.mode().as_str().to_string(),
+                                    },
+                                );
+                            }
                         }
                     }
                 }

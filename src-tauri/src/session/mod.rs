@@ -94,9 +94,15 @@ impl ServiceState {
 
     /// Insert or refresh: a live (partial-transcript) suggestion replaces
     /// the pending card for the same content instead of stacking duplicate
-    /// cards as the match strengthens.
-    pub fn upsert_suggestion(&self, s: Suggestion) -> Suggestion {
+    /// cards as the match strengthens. Once the operator has decided on a
+    /// verse (shown/ignored), it is never re-suggested → None suppresses.
+    pub fn upsert_suggestion(&self, s: Suggestion) -> Option<Suggestion> {
         let mut q = self.suggestions.lock();
+        if q.iter().any(|e| {
+            e.item_id == s.item_id && e.section_key == s.section_key && e.status != "pending"
+        }) {
+            return None; // already decided — do not nag
+        }
         if let Some(existing) = q.iter_mut().rev().find(|e| {
             e.status == "pending" && e.item_id == s.item_id && e.section_key == s.section_key
         }) {
@@ -104,10 +110,10 @@ impl ServiceState {
             existing.label = s.label.clone();
             existing.confidence = s.confidence;
             existing.preview = s.preview.clone();
-            return existing.clone();
+            return Some(existing.clone());
         }
         drop(q);
-        self.add_suggestion(s)
+        Some(self.add_suggestion(s))
     }
 
     pub fn pending_suggestions(&self) -> Vec<Suggestion> {
@@ -129,5 +135,57 @@ impl ServiceState {
         let s = q.iter_mut().rev().find(|s| s.id == id)?;
         s.status = status.to_string();
         Some(s.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::intelligence::Suggestion;
+
+    fn sug(item: &str, key: &str) -> Suggestion {
+        Suggestion {
+            id: String::new(),
+            kind: "quote".into(),
+            label: format!("{item} {key}"),
+            item_id: item.into(),
+            section_key: key.into(),
+            confidence: 0.8,
+            status: "pending".into(),
+            preview: String::new(),
+        }
+    }
+
+    /// Once the operator shows or ignores a verse, later partials for the
+    /// same verse must not raise a new card.
+    #[test]
+    fn resolved_suggestions_are_not_resuggested() {
+        let service = ServiceState::new();
+        let first = service
+            .upsert_suggestion(sug("bible-kjv-john", "john.3.16"))
+            .expect("first card is created");
+        service.set_suggestion_status(&first.id, "shown").unwrap();
+
+        assert!(
+            service.upsert_suggestion(sug("bible-kjv-john", "john.3.16")).is_none(),
+            "decided verse must be suppressed"
+        );
+        // A different verse still flows through.
+        assert!(service
+            .upsert_suggestion(sug("bible-kjv-psalm", "psalm.23.1"))
+            .is_some());
+    }
+
+    /// A pending card for the same verse is refreshed in place, not duplicated.
+    #[test]
+    fn pending_cards_refresh_in_place() {
+        let service = ServiceState::new();
+        let a = service.upsert_suggestion(sug("bible-kjv-john", "john.3.16")).unwrap();
+        let mut stronger = sug("bible-kjv-john", "john.3.16");
+        stronger.confidence = 0.95;
+        let b = service.upsert_suggestion(stronger).unwrap();
+        assert_eq!(a.id, b.id, "same card refreshed");
+        assert_eq!(b.confidence, 0.95);
+        assert_eq!(service.recent_suggestions(50).len(), 1);
     }
 }

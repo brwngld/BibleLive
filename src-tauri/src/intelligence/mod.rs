@@ -368,9 +368,11 @@ fn quote_coverage(_phrase: &str, _snippet: &str) -> Option<f32> {
 }
 
 /// Ranked quote candidates from a PARTIAL transcript (progressive matching).
-/// Prefix phrases from 3 words are searched — as the preacher speaks,
-/// "For God so loved" already points at John 3:16 — and distinct
-/// (item, section) hits come back best-first for stability filtering.
+/// Prefix phrases from 4 words are searched — as the preacher speaks,
+/// "For God so loved" already points at John 3:16 — but a phrase is only
+/// usable when it is DISTINCTIVE: common phrases ("and he said unto them"
+/// appears in dozens of verses) match the wrong scripture, so phrases with
+/// more than 3 containing sections are skipped for live matching.
 pub fn match_quote_candidates(
     store: &ContentStore,
     text: &str,
@@ -381,18 +383,23 @@ pub fn match_quote_candidates(
         .filter(|w| !w.is_empty())
         .map(|w| w.to_lowercase())
         .collect();
-    if words.len() < 3 {
+    if words.len() < 4 {
         return Vec::new();
     }
     let max_len = words.len().min(14);
     let mut best: Vec<(SearchHit, f32)> = Vec::new();
-    for len in (3..=max_len).rev() {
+    for len in (4..=max_len).rev() {
         for start in 0..=(words.len() - len) {
             let phrase = words[start..start + len].join(" ");
             let fts = format!("\"{}\"", phrase.replace('\'', "''"));
-            let Ok(hits) = store.search_phrase(&fts, 5) else {
+            let Ok(hits) = store.search_phrase(&fts, 4) else {
                 continue;
             };
+            // Distinctiveness gate: a phrase living in many sections
+            // identifies nothing — skip it for live suggestions.
+            if hits.len() > 3 {
+                continue;
+            }
             for hit in hits {
                 if quote_coverage(&phrase, &hit.snippet).is_none() {
                     continue;
@@ -446,15 +453,27 @@ impl LiveMatcher {
     /// dominant candidate should be shown live (id is assigned by the
     /// service, pass it through `upsert_suggestion`).
     pub fn observe(&mut self, store: &ContentStore, text: &str) -> Option<Suggestion> {
-        // A complete spoken reference is unambiguous — fire immediately.
+        // One live card per utterance: after the first promotion only the
+        // same candidate refreshes; a different one waits for the verified
+        // final pass instead of stacking cards.
+        let hold = |promoted: &Option<(String, String)>, key: &(String, String)| {
+            matches!(promoted, Some(p) if p != key)
+        };
+
+        // A complete spoken reference is unambiguous — fire immediately
+        // (unless a different candidate already holds this utterance's card).
         for r in parse_references(text) {
             let keys = r.section_keys();
             if keys.is_empty() {
                 continue;
             }
             let item_id = format!("bible-kjv-{}", canonical_book_slug(&r.book));
+            let key = (item_id.clone(), keys[0].clone());
+            if hold(&self.promoted, &key) {
+                return None;
+            }
             let preview = section_preview(store, &item_id, &keys[0]);
-            self.promoted = Some((item_id.clone(), keys[0].clone()));
+            self.promoted = Some(key);
             return Some(Suggestion {
                 id: String::new(),
                 kind: "reference".into(),
@@ -474,6 +493,9 @@ impl LiveMatcher {
             return None;
         };
         let top = (top_hit.item_id.clone(), top_hit.section_key.clone());
+        if hold(&self.promoted, &top) {
+            return None; // something else already holds this utterance's card
+        }
         let runner_up = cands.get(1).map(|(_, c)| *c).unwrap_or(0.0);
         let dominant = runner_up == 0.0 || top_conf - runner_up >= 0.15;
 
@@ -484,7 +506,8 @@ impl LiveMatcher {
             self.streak = 1;
         }
 
-        // Promote from the 2nd consecutive sighting with clear dominance.
+        // Promote from the 2nd consecutive sighting with clear dominance;
+        // afterwards the same candidate just refreshes in place.
         if self.streak >= 2 && dominant && top_conf >= 0.55 {
             self.promoted = Some(top);
             let preview = section_preview(store, &top_hit.item_id, &top_hit.section_key);
@@ -552,7 +575,9 @@ fn section_preview(store: &ContentStore, item_id: &str, section_key: &str) -> St
 }
 
 /// Analyze one transcript segment and produce suggestions, feeding the
-/// service state. Returns the new suggestions (already recorded).
+/// service state. Returns the recorded suggestions. Verses the operator
+/// has already decided on (shown/ignored) are suppressed rather than
+/// re-suggested.
 pub fn analyze_transcript(
     store: &ContentStore,
     service: &ServiceState,
@@ -568,7 +593,7 @@ pub fn analyze_transcript(
         }
         let item_id = format!("bible-kjv-{}", canonical_book_slug(&r.book));
         let preview = section_preview(store, &item_id, &keys[0]);
-        results.push(service.add_suggestion(Suggestion {
+        if let Some(s) = service.upsert_suggestion(Suggestion {
             id: new_id(),
             kind: "reference".into(),
             label: r.label(),
@@ -577,7 +602,9 @@ pub fn analyze_transcript(
             confidence: r.confidence,
             status: "pending".into(),
             preview,
-        }));
+        }) {
+            results.push(s);
+        }
         break; // strongest reference only, per v1 behavior
     }
 
@@ -585,7 +612,7 @@ pub fn analyze_transcript(
     if results.is_empty() {
         if let Some((hit, confidence)) = match_quote(store, text) {
             let preview = section_preview(store, &hit.item_id, &hit.section_key);
-            results.push(service.add_suggestion(Suggestion {
+            if let Some(s) = service.upsert_suggestion(Suggestion {
                 id: new_id(),
                 kind: "quote".into(),
                 label: hit.section_label.clone(),
@@ -594,7 +621,9 @@ pub fn analyze_transcript(
                 confidence,
                 status: "pending".into(),
                 preview,
-            }));
+            }) {
+                results.push(s);
+            }
         }
     }
 
@@ -677,6 +706,46 @@ mod tests {
             lm.observe(&store, "for god so loved the world").is_none(),
             "top changed between partials must not promote"
         );
+    }
+
+    /// Common phrases ("and he said unto them" lives in dozens of verses)
+    /// identify nothing — they must never produce a live suggestion, even
+    /// when stable across partials.
+    #[test]
+    fn live_matcher_rejects_common_phrases() {
+        let store = crate::content::ContentStore::open_at(
+            std::env::temp_dir().join("bl-preview-test"),
+        )
+        .expect("open test store");
+        let mut lm = LiveMatcher::new();
+        lm.observe(&store, "and he said unto them");
+        assert!(
+            lm.observe(&store, "and he said unto them").is_none(),
+            "a phrase appearing in many verses must not promote"
+        );
+    }
+
+    /// One live card per utterance: after the first promotion, a different
+    /// candidate waits for the verified final pass instead of stacking.
+    #[test]
+    fn live_matcher_holds_one_card_per_utterance() {
+        let store = crate::content::ContentStore::open_at(
+            std::env::temp_dir().join("bl-preview-test"),
+        )
+        .expect("open test store");
+        let mut lm = LiveMatcher::new();
+        lm.observe(&store, "for god so loved");
+        let first = lm
+            .observe(&store, "for god so loved the world")
+            .expect("stable candidate promotes");
+        let later = lm.observe(&store, "the lord is my shepherd i shall not want");
+        assert!(later.is_none(), "a second live card must not appear mid-utterance");
+        // The held card can still refresh (same verse, same utterance).
+        let refresh = lm
+            .observe(&store, "for god so loved the world that he gave")
+            .expect("same candidate refreshes in place");
+        assert_eq!((refresh.item_id, refresh.section_key), (first.item_id, first.section_key));
+        assert!(refresh.confidence >= first.confidence);
     }
 
     #[test]
