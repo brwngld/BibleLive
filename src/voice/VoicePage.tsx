@@ -117,6 +117,7 @@ export default function VoicePage() {
       if (listening) {
         await voiceApi.stop();
         setListening(false);
+        setLevel(0);
       } else {
         await voiceApi.start();
         setListening(true);
@@ -266,8 +267,8 @@ export default function VoicePage() {
               }
             />
             <span className="muted">
-              threshold {(config?.vadThreshold ?? 0).toFixed(3)} (lower = more
-              sensitive)
+              threshold {(config?.vadThreshold ?? 0).toFixed(3)} · auto-adapts
+              to room noise (this is the minimum)
             </span>
           </label>
           <label>

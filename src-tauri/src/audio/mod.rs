@@ -167,13 +167,31 @@ pub fn agc_boost_segment(seg: &mut [f32]) {
 const FRAME: usize = 480; // 30 ms @ 16 kHz
 const PREROLL_FRAMES: usize = 16; // ~0.5 s
 const END_SILENCE_FRAMES: usize = 24; // 0.72 s hangover before a segment closes
-const MIN_SPEECH_FRAMES: usize = 13; // ~0.4 s
+const MIN_SPEECH_FRAMES: usize = 8; // ~0.25 s — shorter calls must not be dropped
 const MAX_SEGMENT_FRAMES: usize = 1000; // 30 s hard cap
+
+/// How fast the learned noise floor tracks the room (per quiet frame,
+/// ~1.5 s time constant). Updated only on quiet frames outside speech.
+const NOISE_EMA_ALPHA: f32 = 0.02;
+/// Speech must rise this far above the learned noise floor to count.
+const FLOOR_MULTIPLIER: f32 = 2.5;
+/// The first ~1 s after start only learns the noise floor. A cold floor of
+/// zero plus a sensitive threshold would classify the room itself as speech
+/// from frame one, never see a quiet moment, and never recover.
+const CALIBRATION_FRAMES: usize = 34;
 
 /// Energy-gate VAD with pre-roll and hangover. Feed 16 kHz mono frames;
 /// completed speech segments come back from `feed`.
+///
+/// The gate adapts to the room: a slow average of quiet-frame levels forms
+/// the noise floor, and the effective threshold is the higher of the
+/// configured sensitivity and floor × 2.5. A fixed threshold either misses
+/// soft speech when set high or triggers on room noise when set low — the
+/// room never sits still, so the detector must track it.
 pub struct Segmenter {
     threshold: f32,
+    noise_floor: f32,
+    cal_frames: usize,
     preroll: std::collections::VecDeque<Vec<f32>>,
     current: Vec<f32>,
     silence_frames: usize,
@@ -185,6 +203,8 @@ impl Segmenter {
     pub fn new(threshold: f32) -> Self {
         Self {
             threshold,
+            noise_floor: 0.0,
+            cal_frames: CALIBRATION_FRAMES,
             preroll: std::collections::VecDeque::with_capacity(PREROLL_FRAMES),
             current: Vec::new(),
             silence_frames: 0,
@@ -193,11 +213,37 @@ impl Segmenter {
         }
     }
 
+    fn effective_threshold(&self) -> f32 {
+        self.threshold.max(self.noise_floor * FLOOR_MULTIPLIER)
+    }
+
     /// Feed one 30 ms frame (480 samples, 16 kHz mono). Returns a completed
     /// segment when the hangover timer expires or the cap is hit.
     pub fn feed(&mut self, frame: &[f32]) -> Option<Vec<f32>> {
         let rms = (frame.iter().map(|s| s * s).sum::<f32>() / frame.len() as f32).sqrt();
-        let is_speech = rms >= self.threshold;
+
+        // Calibration: learn the room fast before gating anything.
+        if self.cal_frames > 0 {
+            self.cal_frames -= 1;
+            self.noise_floor = if self.noise_floor == 0.0 {
+                rms
+            } else {
+                self.noise_floor * 0.9 + rms * 0.1
+            };
+            if self.preroll.len() == PREROLL_FRAMES {
+                self.preroll.pop_front();
+            }
+            self.preroll.push_back(frame.to_vec());
+            return None;
+        }
+
+        let is_speech = rms >= self.effective_threshold();
+
+        if !self.in_speech && !is_speech {
+            // Quiet moment outside speech: keep tracking the room.
+            self.noise_floor = self.noise_floor * (1.0 - NOISE_EMA_ALPHA)
+                + rms * NOISE_EMA_ALPHA;
+        }
 
         if is_speech {
             self.speech_frames += 1;
@@ -313,12 +359,20 @@ impl CaptureManager {
             Ok((stream, feed)) => {
                 let _ = init_tx.send(Ok(()));
                 let _ = feed_tx.send(Arc::clone(&feed));
-                // Level forwarder: publishes the meter value until capture ends.
+                // Level forwarder: publishes the meter value until capture
+                // ends, then parks the meter at zero and exits. Without the
+                // running flag it looped forever re-emitting the last frozen
+                // level after Stop (and every Start stacked another thread).
+                let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
                 {
                     let feed = Arc::clone(&feed);
-                    std::thread::spawn(move || loop {
-                        std::thread::sleep(std::time::Duration::from_millis(150));
-                        on_level(latest_level(&feed));
+                    let running = Arc::clone(&running);
+                    std::thread::spawn(move || {
+                        while running.load(Ordering::Relaxed) {
+                            std::thread::sleep(std::time::Duration::from_millis(150));
+                            on_level(latest_level(&feed));
+                        }
+                        on_level(0.0);
                     });
                 }
                 // Block until stop is requested, then drop the stream.
@@ -328,6 +382,8 @@ impl CaptureManager {
                         Err(mpsc::RecvTimeoutError::Timeout) => {}
                     }
                 }
+                running.store(false, Ordering::Relaxed);
+                std::thread::sleep(std::time::Duration::from_millis(160));
                 // stream dropped here → capture stops
             }
             Err(e) => {
@@ -607,6 +663,59 @@ mod tests {
         let mid = &out[4_000..12_000];
         let r = rms(mid);
         assert!(r < 0.03, "12 kHz RMS {r} should be strongly attenuated");
+    }
+
+    /// The gate learns the room: after settling on a noise floor, audio
+    /// below floor×2.5 never triggers (even if above the configured
+    /// threshold), while clear speech above it does.
+    #[test]
+    fn segmenter_adapts_to_noise_floor() {
+        let mut s = Segmenter::new(0.001); // very sensitive setting
+        let noise = vec![0.02f32; FRAME]; // constant "room" at RMS 0.02
+        for _ in 0..66 {
+            assert!(s.feed(&noise).is_none(), "room noise must not trigger");
+        }
+        // 0.045 is above the 0.001 threshold but below floor×2.5 (0.05).
+        let soft = vec![0.045f32; FRAME];
+        for _ in 0..60 {
+            assert!(s.feed(&soft).is_none(), "below adaptive floor must not trigger");
+        }
+        // Clear speech closes a segment after the hangover.
+        let loud = vec![0.3f32; FRAME];
+        for _ in 0..10 {
+            s.feed(&loud);
+        }
+        let mut seg = None;
+        for _ in 0..30 {
+            if let Some(x) = s.feed(&noise) {
+                seg = Some(x);
+                break;
+            }
+        }
+        let seg = seg.expect("speech above floor must produce a segment");
+        assert!(seg.len() >= 10 * FRAME, "segment keeps all speech frames");
+    }
+
+    /// Short but clear utterances (~0.25 s) are kept, not silently dropped.
+    #[test]
+    fn segmenter_keeps_short_calls() {
+        let mut s = Segmenter::new(0.015);
+        let quiet = vec![0.001f32; FRAME];
+        for _ in 0..40 {
+            s.feed(&quiet); // settle the floor low
+        }
+        let speech = vec![0.4f32; FRAME];
+        for _ in 0..MIN_SPEECH_FRAMES {
+            s.feed(&speech);
+        }
+        let mut seg = None;
+        for _ in 0..40 {
+            if let Some(x) = s.feed(&quiet) {
+                seg = Some(x);
+                break;
+            }
+        }
+        assert!(seg.is_some(), "{} speech frames must complete a segment", MIN_SPEECH_FRAMES);
     }
 
     /// A quiet speech segment is amplified toward whisper's healthy input
