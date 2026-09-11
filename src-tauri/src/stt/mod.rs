@@ -12,10 +12,26 @@ type WhisperCtx = *mut c_void;
 extern "C" {
     fn bl_init(model_path: *const c_char) -> WhisperCtx;
     fn bl_install_crash_handler();
-    fn bl_run(ctx: WhisperCtx, samples: *const f32, n_samples: c_int, n_threads: c_int) -> c_int;
+    fn bl_run(
+        ctx: WhisperCtx,
+        samples: *const f32,
+        n_samples: c_int,
+        n_threads: c_int,
+        initial_prompt: *const c_char,
+    ) -> c_int;
     fn bl_segment(ctx: WhisperCtx, i: c_int) -> *const c_char;
     fn bl_free(ctx: WhisperCtx);
 }
+
+/// Decoder bias toward the app's domain: scripture phrasing and book names
+/// in KJV diction. Without it whisper guesses everyday English ("God said"
+/// became "got saved"). The silence test verifies the prompt never makes
+/// non-speech hallucinate scripture.
+const BIBLE_PROMPT: &str = "King James Bible reading. And God said, Let there \
+be light: and there was light. In the beginning God created the heaven and the \
+earth. For God so loved the world, that he gave his only begotten Son. Genesis,\
+ Exodus, Psalms, Proverbs, Isaiah, Matthew, Mark, Luke, John, Acts, Romans, \
+Revelation.";
 
 /// Thread-safe handle to a loaded whisper context. Calls are serialized with
 /// a mutex because whisper_full mutates the context.
@@ -61,7 +77,10 @@ impl SttEngine {
         let threads = std::thread::available_parallelism()
             .map(|n| n.get() as c_int)
             .unwrap_or(4);
-        let n = unsafe { bl_run(ctx, samples.as_ptr(), samples.len() as c_int, threads) };
+        let prompt = CString::new(BIBLE_PROMPT).unwrap_or_default();
+        let n = unsafe {
+            bl_run(ctx, samples.as_ptr(), samples.len() as c_int, threads, prompt.as_ptr())
+        };
         if n < 0 {
             return Err("whisper inference failed".into());
         }

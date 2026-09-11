@@ -9,7 +9,8 @@ void *bl_init(const char *model_path) {
     return (void *)whisper_init_from_file_with_params(model_path, cparams);
 }
 
-int bl_run(void *ctx, const float *samples, int n_samples, int n_threads) {
+int bl_run(void *ctx, const float *samples, int n_samples, int n_threads,
+           const char *initial_prompt) {
     struct whisper_full_params p =
         whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
     p.n_threads = n_threads > 0 ? n_threads : 4;
@@ -23,6 +24,9 @@ int bl_run(void *ctx, const float *samples, int n_samples, int n_threads) {
     p.print_timestamps = false;
     p.suppress_blank = true;
     p.language = "en";
+    if (initial_prompt) {
+        p.initial_prompt = initial_prompt;
+    }
     if (whisper_full((struct whisper_context *)ctx, p, samples, n_samples) != 0) {
         return -1;
     }
