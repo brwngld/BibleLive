@@ -91,6 +91,7 @@ fn valid_hex_color(s: &str) -> bool {
 }
 
 /// What a slot is currently holding (internal).
+#[derive(Clone)]
 pub struct SectionedContent {
     item_id: String,
     kind: RenderKind,
@@ -336,6 +337,26 @@ impl DisplayManager {
         st.blank = false;
     }
 
+    /// First slot set to AUTO (1-based), if any — the target Automatic-mode
+    /// voice suggestions project themselves onto.
+    pub fn find_auto_slot(&self) -> Option<u8> {
+        self.slots
+            .lock()
+            .iter()
+            .enumerate()
+            .find(|(_, s)| s.mode == DisplayMode::Auto)
+            .map(|(i, _)| (i + 1) as u8)
+    }
+
+    /// Snapshot a slot's current text content so an automatic show can be
+    /// undone by restoring what was there before.
+    pub fn content_snapshot(&self, slot: u8) -> Option<SectionedContent> {
+        match &self.slots.lock()[(slot as usize).clamp(1, SLOT_COUNT) - 1].content {
+            Some(SlotContent::Sections(c)) => Some(c.clone()),
+            _ => None,
+        }
+    }
+
     pub fn set_media(&self, slot: u8, title: String, image_path: Option<String>, video_path: Option<String>) {
         let mut slots = self.slots.lock();
         let st = &mut slots[(slot as usize).clamp(1, SLOT_COUNT) - 1];
@@ -449,6 +470,21 @@ pub fn load_profiles(store: &ContentStore) -> Result<Vec<DisplayProfile>, String
 mod tests {
     use super::*;
     use crate::content::model::{ItemType, Section};
+
+    /// Automatic-mode targeting: no slot is AUTO by default (explicit
+    /// operator opt-in), and the first AUTO slot wins.
+    #[test]
+    fn auto_slot_targeting() {
+        let mgr = DisplayManager::new();
+        assert_eq!(mgr.find_auto_slot(), None, "all slots default to MANUAL");
+
+        mgr.set_mode(3, DisplayMode::Auto);
+        mgr.set_mode(5, DisplayMode::Auto);
+        assert_eq!(mgr.find_auto_slot(), Some(3), "first AUTO slot is the target");
+
+        mgr.set_mode(3, DisplayMode::Manual);
+        assert_eq!(mgr.find_auto_slot(), Some(5));
+    }
 
     fn test_store(tag: &str) -> ContentStore {
         let dir = std::env::temp_dir().join(format!(

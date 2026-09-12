@@ -4,6 +4,7 @@ import {
   onTranscript,
   onPartialTranscript,
   onSuggestion,
+  onAutoShown,
   onLevel,
   type UnlistenFn,
   type AudioDeviceInfo,
@@ -39,6 +40,10 @@ export default function VoicePage() {
   const [diagText, setDiagText] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<AudioTestResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Automatic mode: id → { slot, until } while an Undo window is open.
+  const [autoShown, setAutoShown] = useState<
+    Record<string, { slot: number; until: number }>
+  >({});
 
   const feedRef = useRef<HTMLDivElement>(null);
 
@@ -103,6 +108,19 @@ export default function VoicePage() {
       }),
     );
     unlisteners.push(onLevel((lv) => setLevel(lv)));
+    unlisteners.push(
+      onAutoShown((e) => {
+        const until = Date.now() + e.undoMs;
+        setAutoShown((prev) => ({ ...prev, [e.id]: { slot: e.slot, until } }));
+        setTimeout(() => {
+          setAutoShown((prev) => {
+            const next = { ...prev };
+            delete next[e.id];
+            return next;
+          });
+        }, e.undoMs + 250);
+      }),
+    );
     let fns: UnlistenFn[] = [];
     Promise.all(unlisteners).then((f) => {
       fns = f;
@@ -161,6 +179,14 @@ export default function VoicePage() {
       await voiceApi.setSttModel(m);
     } catch (e) {
       setSttModel(prev);
+      setError(String(e));
+    }
+  }
+
+  async function undoAutoShow(id: string) {
+    try {
+      await voiceApi.undoAutoShow(id);
+    } catch (e) {
       setError(String(e));
     }
   }
@@ -426,7 +452,7 @@ export default function VoicePage() {
             {mode === "assisted" &&
               "Scripture detected is shown here for you to approve."}
             {mode === "automatic" &&
-              "High-confidence matches would be pushed to displays automatically (display engine pending)."}
+              "High-confidence verified matches project automatically to the first slot set to AUTO (Displays tab). UNDO is offered for 10 seconds."}
           </p>
           <button
             className={listening ? "danger" : "primary"}
@@ -492,6 +518,17 @@ export default function VoicePage() {
                 </div>
                 {s.preview && (
                   <div className="suggestion-preview">“{s.preview}”</div>
+                )}
+                {autoShown[s.id] && autoShown[s.id].until > Date.now() && (
+                  <div className="auto-shown">
+                    ⚡ shown automatically → Display {autoShown[s.id].slot}
+                    <button
+                      className="danger undo-btn"
+                      onClick={() => undoAutoShow(s.id)}
+                    >
+                      UNDO
+                    </button>
+                  </div>
                 )}
                 {s.status === "pending" ? (
                   <div className="form-actions">

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { serviceApi, type SessionItemRow, type SessionMeta } from "./api";
-import { voiceApi, onSuggestion, type Suggestion } from "../voice/api";
+import { voiceApi, onSuggestion, onAutoShown, type Suggestion } from "../voice/api";
 import { displayApi, onDisplayUpdate, type SlotView } from "../display/api";
 
 /**
@@ -21,6 +21,9 @@ export default function LivePage() {
   const [listening, setListening] = useState(false);
   const [mode, setMode] = useState("assisted");
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [autoShown, setAutoShown] = useState<
+    Record<string, { slot: number; until: number }>
+  >({});
   const [slots, setSlots] = useState<SlotView[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -55,6 +58,18 @@ export default function LivePage() {
       onSuggestion((e) =>
         setSuggestions((prev) => [e.suggestion, ...prev.filter((p) => p.id !== e.suggestion.id)].slice(0, 10)),
       ),
+    );
+    uns.push(
+      onAutoShown((e) => {
+        setAutoShown((prev) => ({ ...prev, [e.id]: { slot: e.slot, until: Date.now() + e.undoMs } }));
+        setTimeout(() => {
+          setAutoShown((prev) => {
+            const next = { ...prev };
+            delete next[e.id];
+            return next;
+          });
+        }, e.undoMs + 250);
+      }),
     );
     uns.push(onDisplayUpdate(() => refreshSlots()));
     Promise.all(uns).then((fns) => {
@@ -273,6 +288,20 @@ export default function LivePage() {
                   <b>{s.label}</b>{" "}
                   <span className="muted">{Math.round(s.confidence * 100)}%</span>
                 </div>
+                {s.preview && <div className="suggestion-preview">“{s.preview}”</div>}
+                {autoShown[s.id] && autoShown[s.id].until > Date.now() && (
+                  <div className="auto-shown">
+                    ⚡ auto → Display {autoShown[s.id].slot}
+                    <button
+                      className="danger undo-btn"
+                      onClick={() =>
+                        voiceApi.undoAutoShow(s.id).catch((e) => setError(String(e)))
+                      }
+                    >
+                      UNDO
+                    </button>
+                  </div>
+                )}
                 {s.status === "pending" && (
                   <div className="form-actions">
                     <button className="primary" onClick={() => respond(s, true)}>

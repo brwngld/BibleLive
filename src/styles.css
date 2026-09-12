@@ -1008,3 +1008,21 @@ input[type="color"] {
   max-height: 96px;
   overflow: auto;
 }
+
+/* ---- Automatic-mode auto-show badge ---- */
+.auto-shown {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0;
+  padding: 6px 10px;
+  background: #78350f;
+  border: 1px solid #f59e0b;
+  border-radius: 8px;
+  color: #fde68a;
+  font-size: 0.9em;
+}
+.auto-shown .undo-btn {
+  margin-left: auto;
+  padding: 3px 12px;
+}

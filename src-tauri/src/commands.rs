@@ -544,24 +544,26 @@ pub struct ScriptureInput {
     pub keys: Vec<String>,
 }
 
-/// Put scripture on a slot. Loads the WHOLE chapter of the first requested
-/// verse (so Next/Prev walks the chapter); index starts at the picked verse.
-#[tauri::command]
-pub async fn set_slot_scripture(
-    app: tauri::AppHandle,
-    mgr: State<'_, DisplayManager>,
-    store: State<'_, ContentStore>,
-    service: State<'_, Arc<ServiceState>>,
-    input: ScriptureInput,
+/// Shared scripture projection: loads the WHOLE chapter of the first
+/// requested key (so Next/Prev walks the chapter), index at the picked
+/// verse. Used by the manual command and by Automatic-mode auto-show.
+async fn scripture_to_slot(
+    app: &tauri::AppHandle,
+    mgr: &DisplayManager,
+    store: &ContentStore,
+    service: &ServiceState,
+    slot: u8,
+    item_id: String,
+    keys: Vec<String>,
 ) -> Result<(), String> {
-    let s = store.inner().clone();
-    let item_id = input.item_id.clone();
-    let keys = input.keys.clone();
+    let s = store.clone();
+    let item_id_inner = item_id.clone();
+    let keys_inner = keys.clone();
     let (title, sections, index) = tauri::async_runtime::spawn_blocking(move || {
         // Chapter mode first: whole chapter, index at the requested verse.
         let mut loaded: Option<(usize, Vec<LabeledSection>)> = None;
-        for k in &keys {
-            if let Some(found) = s.get_chapter_sections(&item_id, k)? {
+        for k in &keys_inner {
+            if let Some(found) = s.get_chapter_sections(&item_id_inner, k)? {
                 loaded = Some(found);
                 break;
             }
@@ -569,7 +571,7 @@ pub async fn set_slot_scripture(
         let (index, sections) = match loaded {
             Some(x) => x,
             None => {
-                let v = s.get_sections_by_keys(&item_id, &keys)?;
+                let v = s.get_sections_by_keys(&item_id_inner, &keys_inner)?;
                 if v.is_empty() {
                     return Err(crate::content::ContentError::Other(
                         "no verses matched those keys".into(),
@@ -579,7 +581,7 @@ pub async fn set_slot_scripture(
             }
         };
         let title = s
-            .get_item(&item_id)?
+            .get_item(&item_id_inner)?
             .map(|i| i.title)
             .unwrap_or_else(|| "Scripture".into());
         Ok((title, sections, index))
@@ -598,12 +600,34 @@ pub async fn set_slot_scripture(
         .unwrap_or_default();
     let rec_title = title.clone();
     mgr.set_sections(
-        input.slot,
-        SectionedContent::with_index(input.item_id.clone(), RenderKind::Scripture, title, sections, index),
+        slot,
+        SectionedContent::with_index(item_id.clone(), RenderKind::Scripture, title, sections, index),
     );
-    record_item(&store, &service, input.slot, "scripture", &rec_title, &label);
-    display::emit_slot(&app, input.slot, &mgr);
+    record_item(store, service, slot, "scripture", &rec_title, &label);
+    display::emit_slot(app, slot, mgr);
     Ok(())
+}
+
+/// Put scripture on a slot. Loads the WHOLE chapter of the first requested
+/// verse (so Next/Prev walks the chapter); index starts at the picked verse.
+#[tauri::command]
+pub async fn set_slot_scripture(
+    app: tauri::AppHandle,
+    mgr: State<'_, DisplayManager>,
+    store: State<'_, ContentStore>,
+    service: State<'_, Arc<ServiceState>>,
+    input: ScriptureInput,
+) -> Result<(), String> {
+    scripture_to_slot(
+        &app,
+        mgr.inner(),
+        store.inner(),
+        service.inner(),
+        input.slot,
+        input.item_id,
+        input.keys,
+    )
+    .await
 }
 
 #[derive(serde::Deserialize)]
@@ -1143,12 +1167,36 @@ struct SuggestionPayload {
     mode: String,
 }
 
+/// Snapshots for undoing Automatic-mode auto-shows: suggestion id →
+/// (taken-at, slot, previous content). Entries self-expire on access.
+/// Managed as an Arc so the listening pipeline and the undo command share
+/// one map.
+#[derive(Default)]
+pub struct AutoShowUndo(Mutex<std::collections::HashMap<String, (std::time::Instant, u8, SectionedContent)>>);
+
+/// Verified suggestions must clear this confidence to project themselves.
+const AUTO_SHOW_CONFIDENCE: f32 = 0.75;
+/// How long the operator sees an Undo button after an auto-show.
+const AUTO_UNDO_MS: u64 = 10_000;
+/// Backend hard limit for honoring an undo (UI window + slack).
+const AUTO_UNDO_HARD_LIMIT: std::time::Duration = std::time::Duration::from_secs(15);
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoShownPayload {
+    pub id: String,
+    pub slot: u8,
+    pub undo_ms: u64,
+}
+
 #[tauri::command]
 pub async fn start_listening(
     app: tauri::AppHandle,
     store: State<'_, ContentStore>,
     service: State<'_, Arc<ServiceState>>,
     mgr: State<'_, audio::CaptureManager>,
+    disp: State<'_, DisplayManager>,
+    auto_undo: State<'_, std::sync::Arc<AutoShowUndo>>,
     stt: State<'_, SttHolder>,
 ) -> Result<(), String> {
     let engine = stt.get_or_load(store.inner())?;
@@ -1163,6 +1211,8 @@ pub async fn start_listening(
     // growing queue of stale partials delayed everything. A new partial is
     // dropped when one is still running — the next carries newer text.
     let partial_busy = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let disp_handle = disp.inner().clone(); // Clone-shared (Arc inside)
+    let auto_undo_handle = auto_undo.inner().clone();
     mgr.start(
         &config,
         move |ev| {
@@ -1172,8 +1222,11 @@ pub async fn start_listening(
         let service = service_clone.clone();
         let live = live.clone();
         let busy = partial_busy.clone();
-        // Transcribe off the audio-forwarding thread.
-        std::thread::spawn(move || {
+        let disp = disp_handle.clone();
+        let auto_undo = auto_undo_handle.clone();
+        // Process off the audio-forwarding thread. Async so the Automatic
+        // mode's projection can await the shared scripture loader.
+        tauri::async_runtime::spawn(async move {
             let is_final = matches!(ev, audio::AudioEvent::Final(_));
             let samples = match ev {
                 audio::AudioEvent::Partial(buf) | audio::AudioEvent::Final(buf) => buf,
@@ -1205,14 +1258,63 @@ pub async fn start_listening(
                             .iter()
                             .map(|s| (s.item_id.clone(), s.section_key.clone()))
                             .collect();
-                        for s in finals {
+                        for s in &finals {
                             let _ = app.emit(
                                 "voice-suggestion",
                                 SuggestionPayload {
-                                    suggestion: s,
+                                    suggestion: s.clone(),
                                     mode: mode.as_str().to_string(),
                                 },
                             );
+                        }
+                        // Automatic mode: a pause-verified, high-confidence
+                        // match projects itself to the first AUTO slot; the
+                        // operator keeps an Undo window. No AUTO slot or
+                        // lower confidence → behaves like Assisted (cards).
+                        if mode == ListenMode::Automatic {
+                            if let Some(s) =
+                                finals.iter().find(|s| s.confidence >= AUTO_SHOW_CONFIDENCE)
+                            {
+                                if let Some(slot) = disp.find_auto_slot() {
+                                    let snapshot = disp.content_snapshot(slot);
+                                    let projected = scripture_to_slot(
+                                        &app,
+                                        &disp,
+                                        &store,
+                                        &service,
+                                        slot,
+                                        s.item_id.clone(),
+                                        vec![s.section_key.clone()],
+                                    )
+                                    .await
+                                    .is_ok();
+                                    if projected {
+                                        if let Some(snap) = snapshot {
+                                            let mut map = auto_undo.0.lock();
+                                            map.retain(|_, (at, _, _)|
+                                                at.elapsed() < AUTO_UNDO_HARD_LIMIT * 4);
+                                            map.insert(s.id.clone(), (std::time::Instant::now(), slot, snap));
+                                        }
+                                        if let Some(shown) = service.resolve_suggestion(&s.id, "shown") {
+                                            let _ = app.emit(
+                                                "voice-suggestion",
+                                                SuggestionPayload {
+                                                    suggestion: shown,
+                                                    mode: mode.as_str().to_string(),
+                                                },
+                                            );
+                                        }
+                                        let _ = app.emit(
+                                            "voice-auto-shown",
+                                            AutoShownPayload {
+                                                id: s.id.clone(),
+                                                slot,
+                                                undo_ms: AUTO_UNDO_MS,
+                                            },
+                                        );
+                                    }
+                                }
+                            }
                         }
                         // Retire a live card the verified pass did not confirm.
                         let mut lm = live.lock();
@@ -1278,6 +1380,35 @@ pub async fn start_listening(
 #[tauri::command]
 pub fn stop_listening(mgr: State<'_, audio::CaptureManager>) {
     mgr.stop();
+}
+
+/// Undo an Automatic-mode auto-show: restore what the slot held before and
+/// mark the suggestion ignored. Honored within the undo window only.
+#[tauri::command]
+pub async fn undo_auto_show(
+    app: tauri::AppHandle,
+    disp: State<'_, DisplayManager>,
+    undo: State<'_, std::sync::Arc<AutoShowUndo>>,
+    service: State<'_, Arc<ServiceState>>,
+    id: String,
+) -> Result<(), String> {
+    let entry = undo.0.lock().remove(&id);
+    if let Some((at, slot, snap)) = entry {
+        if at.elapsed() <= AUTO_UNDO_HARD_LIMIT {
+            disp.set_sections(slot, snap);
+            display::emit_slot(&app, slot, &disp);
+        }
+    }
+    if let Some(s) = service.set_suggestion_status(&id, "ignored") {
+        let _ = app.emit(
+            "voice-suggestion",
+            SuggestionPayload {
+                suggestion: s,
+                mode: service.mode().as_str().to_string(),
+            },
+        );
+    }
+    Ok(())
 }
 
 #[tauri::command]

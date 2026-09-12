@@ -120,6 +120,7 @@ pub fn run() {
         .manage(std::sync::Arc::new(session::ServiceState::new()))
         .manage(audio::CaptureManager::new())
         .manage(commands::SttHolder::default())
+        .manage(std::sync::Arc::new(commands::AutoShowUndo::default()))
         .manage(display::DisplayManager::new())
         .setup(|app| {
             use tauri::Manager;
@@ -254,6 +255,7 @@ pub fn run() {
             commands::listening_status,
             commands::start_listening,
             commands::stop_listening,
+            commands::undo_auto_show,
             commands::audio_test,
             commands::list_suggestions,
             commands::respond_suggestion,

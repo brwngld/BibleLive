@@ -56,6 +56,7 @@ export const voiceApi = {
   suggestions: () => invoke<Suggestion[]>("list_suggestions"),
   respond: (id: string, show: boolean) =>
     invoke<Suggestion>("respond_suggestion", { id, show }),
+  undoAutoShow: (id: string) => invoke("undo_auto_show", { id }),
   modelStatus: () => invoke<ModelStatus>("model_status"),
   sttModel: () => invoke<string>("get_stt_model"),
   setSttModel: (model: string) => invoke("set_stt_model", { model }),
@@ -90,6 +91,12 @@ export interface SuggestionEvent {
   suggestion: Suggestion;
   mode: string;
 }
+/** An Automatic-mode match projected itself; Undo is offered briefly. */
+export interface AutoShownEvent {
+  id: string;
+  slot: number;
+  undoMs: number;
+}
 
 export function onTranscript(cb: (e: TranscriptEvent) => void): Promise<UnlistenFn> {
   return listen<TranscriptEvent>("voice-transcript", (ev) => cb(ev.payload));
@@ -100,6 +107,9 @@ export function onPartialTranscript(cb: (e: TranscriptEvent) => void): Promise<U
 
 export function onSuggestion(cb: (e: SuggestionEvent) => void): Promise<UnlistenFn> {
   return listen<SuggestionEvent>("voice-suggestion", (ev) => cb(ev.payload));
+}
+export function onAutoShown(cb: (e: AutoShownEvent) => void): Promise<UnlistenFn> {
+  return listen<AutoShownEvent>("voice-auto-shown", (ev) => cb(ev.payload));
 }
 
 export function onLevel(cb: (level: number) => void): Promise<UnlistenFn> {
