@@ -958,6 +958,19 @@ textarea:focus {
   font-size: 0.8em;
   padding: 4px 10px;
 }
+.tpl-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.tpl-row .tpl-name {
+  flex: 1;
+  min-width: 0;
+}
+.tpl-row select {
+  flex: 1;
+  min-width: 0;
+}
 .check-row {
   flex-direction: row !important;
   align-items: center;

@@ -867,6 +867,43 @@ mod tests {
         assert_eq!(version_tag("Weird ("), None);
     }
 
+    /// Theme templates: upsert by name, delete, and style validation on
+    /// the way in.
+    #[test]
+    fn theme_templates_roundtrip() {
+        let store = test_store("templates");
+        let mut style = SlotStyle::default();
+        style.bg_color = "#0a1230".into();
+        style.transition = "fade".into();
+
+        assert!(load_templates(&store).is_empty(), "fresh store has none");
+        save_template(&store, "Christmas", style.clone()).unwrap();
+        save_template(&store, "Sunday", SlotStyle::default()).unwrap();
+
+        let tpls = load_templates(&store);
+        assert_eq!(tpls.len(), 2);
+        assert_eq!(tpls[0].name, "Christmas");
+        assert_eq!(tpls[0].style.bg_color, "#0a1230");
+        assert_eq!(tpls[0].style.transition, "fade");
+
+        // Upsert by name keeps one entry, with the new look.
+        let mut updated = SlotStyle::default();
+        updated.bg_image = Some("C:/bg.png".into());
+        save_template(&store, "Christmas", updated).unwrap();
+        let tpls = load_templates(&store);
+        assert_eq!(tpls.len(), 2);
+        let xmas = tpls.iter().find(|t| t.name == "Christmas").unwrap();
+        assert_eq!(xmas.style.bg_image.as_deref(), Some("C:/bg.png"));
+
+        // Invalid input rejected, nothing stored.
+        assert!(save_template(&store, "   ", SlotStyle::default()).is_err());
+
+        delete_template(&store, "Sunday").unwrap();
+        let tpls = load_templates(&store);
+        assert_eq!(tpls.len(), 1);
+        assert_eq!(tpls[0].name, "Christmas");
+    }
+
     fn test_store(tag: &str) -> ContentStore {
         let dir = std::env::temp_dir().join(format!(
             "biblelive-disp-{}-{}",
@@ -948,6 +985,52 @@ mod tests {
         assert_eq!(sections[1].lines, vec!["praise the Lord"]);
         assert_eq!(sections[0].lines, vec!["line one", "line two"]); // line breaks preserved
     }
+}
+
+// ---- Theme templates -------------------------------------------------------
+
+const TEMPLATES_KEY: &str = "display_templates";
+
+/// A named, reusable output look: background image + colors + fonts +
+/// alignment + shadow + transition. Saved from one display's style panel,
+/// applied to any display in one click.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThemeTemplate {
+    pub name: String,
+    pub style: SlotStyle,
+}
+
+pub fn load_templates(store: &ContentStore) -> Vec<ThemeTemplate> {
+    store
+        .get_setting(TEMPLATES_KEY)
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+/// Save (upsert by name) the given style as a named template.
+pub fn save_template(store: &ContentStore, name: &str, mut style: SlotStyle) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("template name is empty".into());
+    }
+    style.validate();
+    let mut templates = load_templates(store);
+    templates.retain(|t| t.name != name);
+    templates.push(ThemeTemplate { name: name.to_string(), style });
+    store
+        .set_setting(TEMPLATES_KEY, &serde_json::to_string(&templates).unwrap())
+        .map_err(|e| e.to_string())
+}
+
+pub fn delete_template(store: &ContentStore, name: &str) -> Result<(), String> {
+    let mut templates = load_templates(store);
+    templates.retain(|t| t.name != name);
+    store
+        .set_setting(TEMPLATES_KEY, &serde_json::to_string(&templates).unwrap())
+        .map_err(|e| e.to_string())
 }
 
 // ---- Events -----------------------------------------------------------------

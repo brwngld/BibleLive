@@ -10,6 +10,7 @@ import {
   type MonitorInfo,
   type SlotStyle,
   type SlotView,
+  type ThemeTemplate,
 } from "./api";
 import * as lib from "../library/api";
 import { HOTKEYS } from "../hotkeys";
@@ -142,8 +143,48 @@ function SlotCard({
   const c = view.content;
   const [style, setStyle] = useState<SlotStyle>(c.style);
   const [showStyle, setShowStyle] = useState(false);
+  // Saved theme templates (fetched when the style panel opens).
+  const [templates, setTemplates] = useState<ThemeTemplate[]>([]);
+  const [tplName, setTplName] = useState("");
+  const [tplSel, setTplSel] = useState("");
 
   useEffect(() => setStyle(c.style), [c.style]);
+
+  useEffect(() => {
+    if (showStyle) {
+      displayApi.templates().then(setTemplates).catch(() => setTemplates([]));
+    }
+  }, [showStyle]);
+
+  function refreshTemplates() {
+    displayApi.templates().then(setTemplates).catch(() => setTemplates([]));
+  }
+
+  async function saveTemplate() {
+    const name = tplName.trim();
+    if (!name) {
+      onError("Give the template a name first.");
+      return;
+    }
+    await act(async () => {
+      await displayApi.saveTemplate(name, style);
+      setTplName("");
+      refreshTemplates();
+    });
+  }
+
+  async function applyTemplate(name: string) {
+    const tpl = templates.find((t) => t.name === name);
+    if (!tpl) return;
+    updateStyle(tpl.style);
+  }
+
+  async function deleteTemplate(name: string) {
+    await act(async () => {
+      await displayApi.deleteTemplate(name);
+      refreshTemplates();
+    });
+  }
 
   async function act(fn: () => Promise<unknown>) {
     try {
@@ -368,6 +409,52 @@ function SlotCard({
 
       {showStyle && (
         <div className="style-panel">
+          <div className="tpl-row">
+            <input
+              className="tpl-name"
+              value={tplName}
+              onChange={(e) => setTplName(e.currentTarget.value)}
+              onKeyDown={(e) => e.key === "Enter" && saveTemplate()}
+              placeholder="Save this look as…"
+              title="Name a template from this display's current style"
+            />
+            <button onClick={saveTemplate} title="Save the current style as a template">
+              💾
+            </button>
+          </div>
+          {templates.length > 0 && (
+            <div className="tpl-row">
+              <select value={tplSel} onChange={(e) => setTplSel(e.currentTarget.value)}>
+                <option value="">Choose template…</option>
+                {templates.map((t) => (
+                  <option key={t.name} value={t.name}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                disabled={!tplSel}
+                title="Apply this template to this display"
+                onClick={() => {
+                  applyTemplate(tplSel);
+                  setTplSel("");
+                }}
+              >
+                Apply
+              </button>
+              <button
+                className="danger"
+                disabled={!tplSel}
+                title="Delete this template"
+                onClick={() => {
+                  deleteTemplate(tplSel);
+                  setTplSel("");
+                }}
+              >
+                ✕
+              </button>
+            </div>
+          )}
           <div className="style-presets">
             {THEME_PRESETS.map((p) => (
               <button

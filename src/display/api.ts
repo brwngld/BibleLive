@@ -143,6 +143,12 @@ export interface DisplayProfile {
   slots: { monitor: string | null; mode: "auto" | "manual" | "lock" }[];
 }
 
+/** A named, reusable output look saved from a display's style panel. */
+export interface ThemeTemplate {
+  name: string;
+  style: SlotStyle;
+}
+
 export const displayApi = {
   monitors: () => invoke<MonitorInfo[]>("list_monitors"),
   slots: () => invoke<SlotView[]>("get_display_slots"),
@@ -156,6 +162,10 @@ export const displayApi = {
     invoke("set_slot_scripture", { input: { slot, itemId, keys } }),
   setPair: (slot: number, version: string | null) =>
     invoke("set_slot_pair", { input: { slot, version } }),
+  templates: () => invoke<ThemeTemplate[]>("list_theme_templates"),
+  saveTemplate: (name: string, style: SlotStyle) =>
+    invoke("save_theme_template", { name, style }),
+  deleteTemplate: (name: string) => invoke("delete_theme_template", { name }),
   setSection: (slot: number, itemId: string, key: string) =>
     invoke("set_slot_section", { input: { slot, itemId, key } }),
   setMedia: (slot: number, input: { title?: string; imagePath?: string; videoPath?: string }) =>

@@ -1059,6 +1059,27 @@ pub fn set_slot_style(
     Ok(())
 }
 
+// ---- Theme templates -------------------------------------------------------
+
+#[tauri::command]
+pub fn list_theme_templates(store: State<'_, ContentStore>) -> Vec<display::ThemeTemplate> {
+    display::load_templates(store.inner())
+}
+
+#[tauri::command]
+pub fn save_theme_template(
+    store: State<'_, ContentStore>,
+    name: String,
+    style: crate::display::SlotStyle,
+) -> Result<(), String> {
+    display::save_template(store.inner(), &name, style)
+}
+
+#[tauri::command]
+pub fn delete_theme_template(store: State<'_, ContentStore>, name: String) -> Result<(), String> {
+    display::delete_template(store.inner(), &name)
+}
+
 #[tauri::command]
 pub fn set_active_display(
     app: tauri::AppHandle,
