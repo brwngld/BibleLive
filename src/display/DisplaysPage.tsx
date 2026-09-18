@@ -12,17 +12,8 @@ import {
   type SlotView,
 } from "./api";
 import * as lib from "../library/api";
+import { HOTKEYS } from "../hotkeys";
 import type { ContentItem, ContentSummary, SearchHit } from "../library/types";
-
-const HOTKEYS: [string, string][] = [
-  ["Ctrl+Alt+1…5", "Select the active display"],
-  ["Ctrl+Alt+→ / ←", "Next / previous verse or stanza on the active display"],
-  ["Ctrl+Alt+B", "Blank / unblank the active display"],
-  ["← / → (in output)", "Step that display's verses"],
-  ["Tab / Shift+Tab (in output)", "Cycle between open fullscreen outputs"],
-  ["M (in output)", "Move this output to the next screen"],
-  ["Esc (in output)", "Close a fullscreen output"],
-];
 
 export default function DisplaysPage() {
   const [slots, setSlots] = useState<SlotView[]>([]);

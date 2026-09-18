@@ -101,6 +101,113 @@ textarea:focus {
   display: flex;
   gap: 6px;
 }
+
+/* ---- Menu bar (File / View / Settings / Tools / Help) ---- */
+
+.menu-bar {
+  display: flex;
+  gap: 2px;
+}
+.menu-root {
+  position: relative;
+}
+.menu-trigger {
+  padding: 5px 12px;
+  background: transparent;
+  border: none;
+  color: #cbd5e1;
+  font-size: 0.92em;
+  border-radius: 6px;
+}
+.menu-trigger:hover,
+.menu-trigger.open {
+  background: #1e293b;
+  color: #f1f5f9;
+}
+.menu-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 240px;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+  padding: 6px;
+  z-index: 60;
+}
+.menu-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  width: 100%;
+  padding: 7px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: #e2e8f0;
+  font-size: 0.9em;
+  text-align: left;
+}
+.menu-entry:hover {
+  background: #1d4ed8;
+  color: #fff;
+}
+.menu-hint {
+  color: #64748b;
+  font-size: 0.85em;
+}
+.menu-entry:hover .menu-hint {
+  color: #bfdbfe;
+}
+.menu-sep {
+  height: 1px;
+  background: #1e293b;
+  margin: 5px 4px;
+}
+
+/* ---- Dialogs ---- */
+
+.hotkey-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
+}
+.hotkey-list .hotkey-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.92em;
+  color: #cbd5e1;
+}
+.hotkey-list .hotkey-item code {
+  min-width: 190px;
+  text-align: center;
+}
+.settings-modal {
+  min-width: 380px;
+  max-width: 460px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.settings-modal label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.85em;
+  color: #94a3b8;
+}
+.settings-about {
+  border-top: 1px solid #1e293b;
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.9em;
+}
 .app-main {
   flex: 1;
   overflow: hidden;

@@ -26,7 +26,12 @@ const TYPE_FILTERS: (ItemType | "all")[] = [
 
 const BIBLE_VERSIONS = ["KJV", "ASV"] as const;
 
-export default function LibraryPage() {
+export default function LibraryPage({
+  autoOpenImport = 0,
+}: {
+  /** Bumped by File → Import; opens the import dialog on change. */
+  autoOpenImport?: number;
+}) {
   const [mode, setMode] = useState<Mode>("browse");
   const [typeFilter, setTypeFilter] = useState<ItemType | "all">("all");
   const [testament, setTestament] = useState<Testament>(null);
@@ -44,6 +49,10 @@ export default function LibraryPage() {
 
   // import state
   const [showImport, setShowImport] = useState(false);
+
+  useEffect(() => {
+    if (autoOpenImport > 0) setShowImport(true);
+  }, [autoOpenImport]);
 
   const refreshStats = useCallback(() => {
     api.getStats().then(setStats).catch(console.error);

@@ -46,6 +46,19 @@ pub fn app_status(store: State<'_, ContentStore>) -> AppStatus {
     }
 }
 
+/// Open the data folder (%APPDATA%\BibleLive) in Windows Explorer —
+/// support shortcut for crash.log and the database.
+#[tauri::command]
+pub fn open_data_folder() -> Result<(), String> {
+    let dir = crate::content::data_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::process::Command::new("explorer")
+        .arg(&dir)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 // ---- Library --------------------------------------------------------------
 
 #[tauri::command]

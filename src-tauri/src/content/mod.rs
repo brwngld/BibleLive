@@ -611,6 +611,11 @@ fn default_data_dir() -> Result<PathBuf, ContentError> {
     Ok(dirs_fallback())
 }
 
+/// Where the database, crash logs and settings live (for the Tools menu).
+pub fn data_dir() -> PathBuf {
+    default_data_dir().unwrap_or_else(|_| dirs_fallback())
+}
+
 fn dirs_fallback() -> PathBuf {
     if let Ok(appdata) = std::env::var("APPDATA") {
         return PathBuf::from(appdata).join("BibleLive");
