@@ -174,7 +174,7 @@ const FRAME: usize = 480; // 30 ms @ 16 kHz
 const PREROLL_FRAMES: usize = 16; // ~0.5 s
 const END_SILENCE_FRAMES: usize = 24; // 0.72 s hangover before a segment closes
 const MIN_SPEECH_FRAMES: usize = 8; // ~0.25 s — shorter calls must not be dropped
-const MAX_SEGMENT_FRAMES: usize = 1000; // 30 s hard cap
+const MAX_SEGMENT_FRAMES: usize = 400; // 12 s cap — continuous reading still yields finals
 
 /// How fast the learned noise floor tracks the room (per quiet frame,
 /// ~1.5 s time constant). Updated only on quiet frames outside speech.

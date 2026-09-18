@@ -55,6 +55,24 @@ pub struct SlotStyle {
     pub font_size: f32,
     pub text_color: String,
     pub bg_color: String,
+    /// Optional background image (absolute file path) rendered behind the
+    /// text — the base of the theme system. Falls back to `bg_color`.
+    #[serde(default)]
+    pub bg_image: Option<String>,
+    /// Text block alignment on the output screen: "center" | "left".
+    #[serde(default = "default_align")]
+    pub align: String,
+    /// Soft shadow behind the text for legibility over busy images.
+    #[serde(default = "default_text_shadow")]
+    pub text_shadow: bool,
+}
+
+fn default_align() -> String {
+    "center".into()
+}
+
+fn default_text_shadow() -> bool {
+    true
 }
 
 impl Default for SlotStyle {
@@ -64,6 +82,9 @@ impl Default for SlotStyle {
             font_size: 6.5,
             text_color: "#ffffff".into(),
             bg_color: "#000000".into(),
+            bg_image: None,
+            align: default_align(),
+            text_shadow: true,
         }
     }
 }
@@ -80,6 +101,13 @@ impl SlotStyle {
         if !valid_hex_color(&self.bg_color) {
             self.bg_color = "#000000".into();
         }
+        if self.align != "left" {
+            self.align = "center".into();
+        }
+        self.bg_image = self
+            .bg_image
+            .take()
+            .filter(|p| !p.trim().is_empty());
     }
 }
 
@@ -337,8 +365,8 @@ impl DisplayManager {
         st.blank = false;
     }
 
-    /// First slot set to AUTO (1-based), if any — the target Automatic-mode
-    /// voice suggestions project themselves onto.
+    /// First slot set to AUTO (1-based), if any — the default target
+    /// Automatic-mode voice suggestions project themselves onto.
     pub fn find_auto_slot(&self) -> Option<u8> {
         self.slots
             .lock()
@@ -346,6 +374,24 @@ impl DisplayManager {
             .enumerate()
             .find(|(_, s)| s.mode == DisplayMode::Auto)
             .map(|(i, _)| (i + 1) as u8)
+    }
+
+    /// Resolve where Automatic-mode suggestions project. `"auto"` (the
+    /// default) picks the first AUTO slot; `"1"`..=`"5"` pins a specific
+    /// slot regardless of its mode — except LOCK, which always protects a
+    /// slot from automation. Anything unresolvable → None (cards only).
+    pub fn auto_target_slot(&self, target: &str) -> Option<u8> {
+        let t = target.trim();
+        if t.eq_ignore_ascii_case("auto") {
+            return self.find_auto_slot();
+        }
+        let n: u8 = t.parse().ok()?;
+        if (1..=SLOT_COUNT as u8).contains(&n) {
+            let mode = self.slots.lock()[(n - 1) as usize].mode;
+            (mode != DisplayMode::Lock).then_some(n)
+        } else {
+            None
+        }
     }
 
     /// Snapshot a slot's current text content so an automatic show can be
@@ -484,6 +530,58 @@ mod tests {
 
         mgr.set_mode(3, DisplayMode::Manual);
         assert_eq!(mgr.find_auto_slot(), Some(5));
+    }
+
+    /// Pinned auto-show targets: "auto" keeps the first-AUTO behavior,
+    /// "1".."5" pins a slot, and LOCK always protects the pinned slot.
+    #[test]
+    fn auto_target_routing() {
+        let mgr = DisplayManager::new();
+        assert_eq!(mgr.auto_target_slot("auto"), None, "no AUTO slot → no target");
+
+        mgr.set_mode(4, DisplayMode::Auto);
+        assert_eq!(mgr.auto_target_slot("auto"), Some(4));
+        assert_eq!(mgr.auto_target_slot("2"), Some(2), "pin works on a MANUAL slot");
+
+        mgr.set_mode(2, DisplayMode::Lock);
+        assert_eq!(mgr.auto_target_slot("2"), None, "LOCK protects the pinned slot");
+        assert_eq!(mgr.auto_target_slot("auto"), Some(4), "auto routing ignores LOCK slots");
+
+        assert_eq!(mgr.auto_target_slot("9"), None, "out of range");
+        assert_eq!(mgr.auto_target_slot("bogus"), None, "garbage → no target");
+    }
+
+    /// Theme fields survive validation: legacy stored styles (without the
+    /// new fields) deserialize to defaults, and empty images clear.
+    #[test]
+    fn style_theme_fields_roundtrip() {
+        let legacy = serde_json::json!({
+            "fontFamily": "Georgia, serif",
+            "fontSize": 5.0,
+            "textColor": "#ffffff",
+            "bgColor": "#000000"
+        });
+        let mut s: SlotStyle = serde_json::from_value(legacy).expect("legacy style deserializes");
+        assert_eq!(s.align, "center");
+        assert!(s.bg_image.is_none());
+        assert!(s.text_shadow, "shadow defaults on to keep the classic look");
+        s.validate();
+        assert_eq!(s.align, "center");
+
+        s.align = "left".into();
+        s.bg_image = Some("   ".into());
+        s.validate();
+        assert_eq!(s.align, "left");
+        assert!(s.bg_image.is_none(), "blank path clears");
+
+        s.align = "diagonal".into();
+        s.validate();
+        assert_eq!(s.align, "center", "unknown alignment falls back");
+
+        let round: SlotStyle =
+            serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(round.align, s.align);
+        assert_eq!(round.text_shadow, s.text_shadow);
     }
 
     fn test_store(tag: &str) -> ContentStore {

@@ -28,7 +28,78 @@ export interface SlotStyle {
   fontSize: number; // vw units on the output screen
   textColor: string;
   bgColor: string;
+  /** Optional background image (absolute file path) behind the text. */
+  bgImage?: string | null;
+  /** Text block alignment: "center" (default) | "left". */
+  align?: "center" | "left";
+  /** Soft shadow behind text for legibility over busy images. */
+  textShadow?: boolean;
 }
+
+/** Presentation-type presets: style patches applied together. A preset
+ *  never touches the background image — that is chosen separately. */
+export const THEME_PRESETS: { name: string; hint: string; style: Partial<SlotStyle> }[] = [
+  {
+    name: "Classic",
+    hint: "Serif · centered · white on black",
+    style: {
+      fontFamily: "Georgia, 'Times New Roman', serif",
+      fontSize: 6.5,
+      textColor: "#ffffff",
+      bgColor: "#000000",
+      align: "center",
+      textShadow: true,
+    },
+  },
+  {
+    name: "Cathedral",
+    hint: "Serif · warm parchment on deep blue · shadowed",
+    style: {
+      fontFamily: "'Book Antiqua', 'Palatino Linotype', serif",
+      fontSize: 6.0,
+      textColor: "#f6efdc",
+      bgColor: "#0a1230",
+      align: "center",
+      textShadow: true,
+    },
+  },
+  {
+    name: "Modern",
+    hint: "Clean sans · left-aligned · light on charcoal",
+    style: {
+      fontFamily: "'Segoe UI', sans-serif",
+      fontSize: 5.5,
+      textColor: "#f2f4f8",
+      bgColor: "#14161a",
+      align: "left",
+      textShadow: false,
+    },
+  },
+  {
+    name: "Lantern",
+    hint: "Large serif · amber on near-black · shadowed",
+    style: {
+      fontFamily: "Cambria, serif",
+      fontSize: 7.5,
+      textColor: "#ffd98e",
+      bgColor: "#0b0805",
+      align: "center",
+      textShadow: true,
+    },
+  },
+  {
+    name: "Bulletin",
+    hint: "Compact sans · left column · white on slate",
+    style: {
+      fontFamily: "Verdana, sans-serif",
+      fontSize: 4.8,
+      textColor: "#ffffff",
+      bgColor: "#1f2a38",
+      align: "left",
+      textShadow: false,
+    },
+  },
+];
 
 export const FONT_OPTIONS = [
   { value: "Georgia, 'Times New Roman', serif", label: "Georgia (serif)" },

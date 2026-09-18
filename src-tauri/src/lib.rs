@@ -262,6 +262,8 @@ pub fn run() {
             commands::model_status,
             commands::get_stt_model,
             commands::set_stt_model,
+            commands::get_voice_auto_target,
+            commands::set_voice_auto_target,
             commands::run_voice_diagnostics,
             commands::list_monitors,
             commands::get_display_slots,

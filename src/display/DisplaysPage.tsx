@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   displayApi,
   onDisplayUpdate,
   FONT_OPTIONS,
+  THEME_PRESETS,
   type DisplayProfile,
   type MonitorInfo,
   type SlotStyle,
@@ -254,7 +256,15 @@ function SlotCard({
       {/* Live preview — exactly what the output shows, scaled down */}
       <div
         className="slot-preview"
-        style={{ backgroundColor: c.kind === "blank" || view.blank ? "#000" : style.bgColor }}
+        style={{
+          backgroundColor: c.kind === "blank" || view.blank ? "#000" : style.bgColor,
+          backgroundImage:
+            c.kind !== "blank" && !view.blank && c.kind !== "image" && style.bgImage
+              ? `url("${convertFileSrc(style.bgImage)}")`
+              : undefined,
+          backgroundSize: "cover",
+          backgroundPosition: "center",
+        }}
       >
         {c.kind === "blank" || view.blank ? (
           <span className="muted preview-empty">blank</span>
@@ -269,6 +279,8 @@ function SlotCard({
               fontFamily: style.fontFamily,
               color: style.textColor,
               fontSize: px(c.kind === "lyrics" ? style.fontSize * 0.72 : style.fontSize),
+              textAlign: style.align === "left" ? "left" : "center",
+              textShadow: (style.textShadow ?? true) ? "0 1px 4px rgba(0,0,0,0.8)" : "none",
             }}
           >
             <div>{c.lines[0] ?? ""}</div>
@@ -324,6 +336,17 @@ function SlotCard({
 
       {showStyle && (
         <div className="style-panel">
+          <div className="style-presets">
+            {THEME_PRESETS.map((p) => (
+              <button
+                key={p.name}
+                title={p.hint}
+                onClick={() => updateStyle(p.style)}
+              >
+                {p.name}
+              </button>
+            ))}
+          </div>
           <label>
             Font
             <select
@@ -365,6 +388,60 @@ function SlotCard({
                 onChange={(e) => updateStyle({ bgColor: e.currentTarget.value })}
               />
             </label>
+          </div>
+          <div className="color-row">
+            <label>
+              Alignment
+              <select
+                value={style.align ?? "center"}
+                onChange={(e) =>
+                  updateStyle({ align: e.currentTarget.value as "center" | "left" })
+                }
+              >
+                <option value="center">Centered</option>
+                <option value="left">Left</option>
+              </select>
+            </label>
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={style.textShadow ?? true}
+                onChange={(e) => updateStyle({ textShadow: e.currentTarget.checked })}
+              />
+              Text shadow
+            </label>
+          </div>
+          <div className="bg-image-row">
+            <button
+              onClick={() =>
+                act(async () => {
+                  const path = await open({
+                    multiple: false,
+                    filters: [
+                      {
+                        name: "Background image",
+                        extensions: ["png", "jpg", "jpeg", "webp", "bmp"],
+                      },
+                    ],
+                  });
+                  if (typeof path === "string") {
+                    updateStyle({ bgImage: path });
+                  }
+                })
+              }
+            >
+              🖼 Background image…
+            </button>
+            {style.bgImage ? (
+              <>
+                <span className="muted bg-image-name" title={style.bgImage}>
+                  {style.bgImage.split(/[\\/]/).pop()}
+                </span>
+                <button onClick={() => updateStyle({ bgImage: null })}>✕ Clear</button>
+              </>
+            ) : (
+              <span className="muted">none — solid color</span>
+            )}
           </div>
         </div>
       )}

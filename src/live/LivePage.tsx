@@ -20,6 +20,7 @@ export default function LivePage() {
   // live status
   const [listening, setListening] = useState(false);
   const [mode, setMode] = useState("assisted");
+  const [autoTarget, setAutoTarget] = useState("auto");
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [autoShown, setAutoShown] = useState<
     Record<string, { slot: number; until: number }>
@@ -51,6 +52,7 @@ export default function LivePage() {
     refreshSlots();
     voiceApi.listeningStatus().then(setListening).catch(() => {});
     voiceApi.getMode().then(setMode).catch(() => {});
+    voiceApi.autoTarget().then(setAutoTarget).catch(() => {});
     voiceApi.suggestions().then(setSuggestions).catch(() => {});
 
     let uns: Promise<UnlistenFnLike>[] = [];
@@ -152,6 +154,15 @@ export default function LivePage() {
     setMode(m);
     try {
       await voiceApi.setMode(m);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function changeAutoTarget(t: string) {
+    setAutoTarget(t);
+    try {
+      await voiceApi.setAutoTarget(t);
     } catch (e) {
       setError(String(e));
     }
@@ -277,6 +288,19 @@ export default function LivePage() {
                 {label}
               </button>
             ))}
+            <select
+              className="auto-target-select"
+              value={autoTarget}
+              onChange={(e) => changeAutoTarget(e.currentTarget.value)}
+              title="Which display Automatic mode projects on"
+            >
+              <option value="auto">→ first AUTO</option>
+              {[1, 2, 3, 4, 5].map((n) => (
+                <option key={n} value={String(n)}>
+                  → Display {n}
+                </option>
+              ))}
+            </select>
           </div>
           <h4>AI Suggestions {pending.length > 0 && `(${pending.length})`}</h4>
           {suggestions.length === 0 ? (

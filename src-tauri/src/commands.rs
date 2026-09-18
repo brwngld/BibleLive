@@ -1069,6 +1069,46 @@ pub async fn get_stt_model(store: State<'_, ContentStore>) -> Result<String, Str
     .map_err(|e| e.to_string())?
 }
 
+/// Where Automatic-mode suggestions project: "auto" (first AUTO slot,
+/// the default) or a pinned "1".."5" — LOCK still protects a pinned slot.
+fn normalize_auto_target(v: &str) -> String {
+    match v.trim() {
+        "1" | "2" | "3" | "4" | "5" => v.trim().to_string(),
+        _ => "auto".to_string(),
+    }
+}
+
+#[tauri::command]
+pub async fn get_voice_auto_target(store: State<'_, ContentStore>) -> Result<String, String> {
+    let s = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        Ok(s.get_setting("voice_auto_target")
+            .ok()
+            .flatten()
+            .map(|v| normalize_auto_target(&v))
+            .unwrap_or_else(|| "auto".into()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn set_voice_auto_target(
+    store: State<'_, ContentStore>,
+    target: String,
+) -> Result<String, String> {
+    let t = normalize_auto_target(&target);
+    let saved = t.clone();
+    let s = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        s.set_setting("voice_auto_target", &saved)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(t)
+}
+
 #[tauri::command]
 pub async fn set_stt_model(
     store: State<'_, ContentStore>,
@@ -1180,6 +1220,9 @@ const AUTO_SHOW_CONFIDENCE: f32 = 0.75;
 const AUTO_UNDO_MS: u64 = 10_000;
 /// Backend hard limit for honoring an undo (UI window + slack).
 const AUTO_UNDO_HARD_LIMIT: std::time::Duration = std::time::Duration::from_secs(15);
+/// A sentence flush also needs at least this many words, so short
+/// acknowledgements ("okay." "right.") never trigger verified matching.
+const FLUSH_MIN_WORDS: usize = 6;
 
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -1201,12 +1244,16 @@ pub async fn start_listening(
 ) -> Result<(), String> {
     let engine = stt.get_or_load(store.inner())?;
     let config = get_voice_config(store.clone()).await?;
+    let auto_target = get_voice_auto_target(store.clone()).await?;
     let app_handle = app.clone();
     let store_clone = store.inner().clone();
     let service_clone = service.inner().clone();
 
     let app_for_level = app.clone();
     let live = Arc::new(Mutex::new(intelligence::LiveMatcher::new()));
+    // Last transcript that already triggered a sentence flush this
+    // utterance, so a stable tail doesn't re-run verified matching.
+    let last_flush = Arc::new(Mutex::new(String::new()));
     // One partial in flight at a time: on a CPU slower than the window, a
     // growing queue of stale partials delayed everything. A new partial is
     // dropped when one is still running — the next carries newer text.
@@ -1221,6 +1268,8 @@ pub async fn start_listening(
         let store = store_clone.clone();
         let service = service_clone.clone();
         let live = live.clone();
+        let last_flush = last_flush.clone();
+        let auto_target = auto_target.clone();
         let busy = partial_busy.clone();
         let disp = disp_handle.clone();
         let auto_undo = auto_undo_handle.clone();
@@ -1249,10 +1298,48 @@ pub async fn start_listening(
             }
             match result {
                 Ok(text) if !text.is_empty() => {
+                    // Continuous reading never hits the closing pause, so a
+                    // rolling partial that just completed a sentence (ends
+                    // in . ! ? with enough words) runs the full verified
+                    // pass right away instead of waiting for silence.
+                    let flush = if is_final {
+                        last_flush.lock().clear();
+                        false
+                    } else {
+                        let mut lf = last_flush.lock();
+                        let hit = text.trim_end().ends_with(|c: char| c == '.' || c == '!' || c == '?')
+                            && text.split_whitespace().count() >= FLUSH_MIN_WORDS
+                            && *lf != text;
+                        if hit {
+                            *lf = text.clone();
+                        }
+                        hit
+                    };
+                    let mode = service.mode();
                     if is_final {
                         // Final, pause-verified transcript: full matching.
                         let _ = app.emit("voice-transcript", TranscriptPayload { text: text.clone() });
-                        let mode = service.mode();
+                    } else {
+                        // Rolling partial: live transcript + progressive
+                        // Scripture matching with confidence/stability gating.
+                        let _ = app.emit(
+                            "voice-transcript-partial",
+                            TranscriptPayload { text: text.clone() },
+                        );
+                        let mut lm = live.lock();
+                        if let Some(s) = lm.observe(&store, &text) {
+                            if let Some(s) = service.upsert_suggestion(s) {
+                                let _ = app.emit(
+                                    "voice-suggestion",
+                                    SuggestionPayload {
+                                        suggestion: s,
+                                        mode: mode.as_str().to_string(),
+                                    },
+                                );
+                            }
+                        }
+                    }
+                    if is_final || flush {
                         let finals = intelligence::analyze_transcript(&store, &service, &text);
                         let confirmed: Vec<(String, String)> = finals
                             .iter()
@@ -1267,15 +1354,17 @@ pub async fn start_listening(
                                 },
                             );
                         }
-                        // Automatic mode: a pause-verified, high-confidence
-                        // match projects itself to the first AUTO slot; the
-                        // operator keeps an Undo window. No AUTO slot or
-                        // lower confidence → behaves like Assisted (cards).
+                        // Automatic mode: a verified, high-confidence match
+                        // projects itself to the configured target slot
+                        // ("auto" = first AUTO slot; a pinned 1–5 respects
+                        // LOCK); the operator keeps an Undo window. No
+                        // resolvable target or lower confidence → behaves
+                        // like Assisted (cards).
                         if mode == ListenMode::Automatic {
                             if let Some(s) =
                                 finals.iter().find(|s| s.confidence >= AUTO_SHOW_CONFIDENCE)
                             {
-                                if let Some(slot) = disp.find_auto_slot() {
+                                if let Some(slot) = disp.auto_target_slot(&auto_target) {
                                     let snapshot = disp.content_snapshot(slot);
                                     let projected = scripture_to_slot(
                                         &app,
@@ -1316,51 +1405,34 @@ pub async fn start_listening(
                                 }
                             }
                         }
-                        // Retire a live card the verified pass did not confirm.
-                        let mut lm = live.lock();
-                        if let Some(key) = lm.promoted_key().cloned() {
-                            if !confirmed.contains(&key) {
-                                for p in service.pending_suggestions() {
-                                    if p.status == "pending"
-                                        && (p.item_id.clone(), p.section_key.clone()) == key
-                                    {
-                                        if let Some(retired) =
-                                            service.set_suggestion_status(&p.id, "ignored")
+                        if is_final {
+                            // Retire a live card the verified pass did not confirm.
+                            let mut lm = live.lock();
+                            if let Some(key) = lm.promoted_key().cloned() {
+                                if !confirmed.contains(&key) {
+                                    for p in service.pending_suggestions() {
+                                        if p.status == "pending"
+                                            && (p.item_id.clone(), p.section_key.clone()) == key
                                         {
-                                            let _ = app.emit(
-                                                "voice-suggestion",
-                                                SuggestionPayload {
-                                                    suggestion: retired,
-                                                    mode: mode.as_str().to_string(),
-                                                },
-                                            );
+                                            if let Some(retired) =
+                                                service.set_suggestion_status(&p.id, "ignored")
+                                            {
+                                                let _ = app.emit(
+                                                    "voice-suggestion",
+                                                    SuggestionPayload {
+                                                        suggestion: retired,
+                                                        mode: mode.as_str().to_string(),
+                                                    },
+                                                );
+                                            }
                                         }
                                     }
                                 }
+                                lm.retire();
                             }
-                            lm.retire();
-                        }
-                        // Next utterance starts fresh: verses decided on
-                        // during this one may be suggested again later.
-                        service.clear_utterance_suppressions();
-                    } else {
-                        // Rolling partial: live transcript + progressive
-                        // Scripture matching with confidence/stability gating.
-                        let _ = app.emit(
-                            "voice-transcript-partial",
-                            TranscriptPayload { text: text.clone() },
-                        );
-                        let mut lm = live.lock();
-                        if let Some(s) = lm.observe(&store, &text) {
-                            if let Some(s) = service.upsert_suggestion(s) {
-                                let _ = app.emit(
-                                    "voice-suggestion",
-                                    SuggestionPayload {
-                                        suggestion: s,
-                                        mode: service.mode().as_str().to_string(),
-                                    },
-                                );
-                            }
+                            // Next utterance starts fresh: verses decided on
+                            // during this one may be suggested again later.
+                            service.clear_utterance_suppressions();
                         }
                     }
                 }

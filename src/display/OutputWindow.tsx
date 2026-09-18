@@ -120,15 +120,34 @@ export default function OutputWindow({ slot }: { slot: number }) {
   const size = style?.fontSize ?? 6.5;
   const textColor = style?.textColor ?? "#ffffff";
   const bgColor = style?.bgColor ?? "#000000";
+  const isText = !blank && (view.kind === "scripture" || view.kind === "lyrics");
+  const alignLeft = style?.align === "left";
+  const shadowCss = (style?.textShadow ?? true) ? "0 2px 14px rgba(0, 0, 0, 0.85)" : "none";
 
   return (
-    <div className="output-root" style={{ backgroundColor: bgColor }}>
+    <div
+      className="output-root"
+      style={{
+        backgroundColor: bgColor,
+        justifyContent: isText && alignLeft ? "flex-start" : "center",
+      }}
+    >
+      {isText && style?.bgImage && (
+        <div
+          className="output-bg"
+          style={{ backgroundImage: `url("${convertFileSrc(style.bgImage)}")` }}
+        />
+      )}
+
       {!blank && view.kind === "scripture" && (
-        <div className="output-scripture">
+        <div
+          className="output-scripture"
+          style={{ textAlign: alignLeft ? "left" : "center", paddingLeft: alignLeft ? "7vw" : undefined }}
+        >
           <div
             ref={scriptureRef}
             className="output-text"
-            style={{ fontFamily: font, fontSize: `${size}vw`, color: textColor }}
+            style={{ fontFamily: font, fontSize: `${size}vw`, color: textColor, textShadow: shadowCss }}
           >
             {view.lines.map((l, i) => (
               <span key={i}>
@@ -138,7 +157,7 @@ export default function OutputWindow({ slot }: { slot: number }) {
           </div>
           <div
             className="output-label"
-            style={{ fontFamily: font, fontSize: `${size * 0.5}vw`, color: textColor }}
+            style={{ fontFamily: font, fontSize: `${size * 0.5}vw`, color: textColor, textShadow: shadowCss }}
           >
             {view.label}
           </div>
@@ -146,11 +165,14 @@ export default function OutputWindow({ slot }: { slot: number }) {
       )}
 
       {!blank && view.kind === "lyrics" && (
-        <div className="output-lyrics">
+        <div
+          className="output-lyrics"
+          style={{ textAlign: alignLeft ? "left" : "center", paddingLeft: alignLeft ? "7vw" : undefined }}
+        >
           <div
             ref={lyricsRef}
             className="output-lyric-lines"
-            style={{ fontFamily: font, fontSize: `${size * 0.72}vw`, color: textColor }}
+            style={{ fontFamily: font, fontSize: `${size * 0.72}vw`, color: textColor, textShadow: shadowCss }}
           >
             {view.lines.map((l, i) => (
               <div key={i}>{l || "\u00A0"}</div>
@@ -158,7 +180,7 @@ export default function OutputWindow({ slot }: { slot: number }) {
           </div>
           <div
             className="output-sublabel"
-            style={{ fontFamily: font, fontSize: `${size * 0.32}vw`, color: textColor }}
+            style={{ fontFamily: font, fontSize: `${size * 0.32}vw`, color: textColor, textShadow: shadowCss }}
           >
             {view.title}
             {view.label ? ` · ${view.label}` : ""}

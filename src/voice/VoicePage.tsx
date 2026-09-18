@@ -36,6 +36,7 @@ export default function VoicePage() {
   const [level, setLevel] = useState(0);
   const [buildTag, setBuildTag] = useState("");
   const [sttModel, setSttModel] = useState("base");
+  const [autoTarget, setAutoTarget] = useState("auto");
   const [diagRunning, setDiagRunning] = useState(false);
   const [diagText, setDiagText] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<AudioTestResult | null>(null);
@@ -64,6 +65,7 @@ export default function VoicePage() {
     voiceApi.getMode().then(setMode).catch(console.error);
     voiceApi.modelStatus().then(setModel).catch(console.error);
     voiceApi.sttModel().then(setSttModel).catch(console.error);
+    voiceApi.autoTarget().then(setAutoTarget).catch(console.error);
     import("@tauri-apps/api/core").then(({ invoke }) =>
       invoke<{ version: string; build: string }>("app_status")
         .then((st) => setBuildTag(`v${st.version} · built ${st.build}`))
@@ -179,6 +181,17 @@ export default function VoicePage() {
       await voiceApi.setSttModel(m);
     } catch (e) {
       setSttModel(prev);
+      setError(String(e));
+    }
+  }
+
+  async function changeAutoTarget(t: string) {
+    const prev = autoTarget;
+    setAutoTarget(t);
+    try {
+      await voiceApi.setAutoTarget(t);
+    } catch (e) {
+      setAutoTarget(prev);
       setError(String(e));
     }
   }
@@ -333,14 +346,32 @@ export default function VoicePage() {
                 saveConfig({ partialWindowMs: Number(e.currentTarget.value) })
               }
             >
-              <option value={1200}>1.2 s — snappiest</option>
-              <option value={2000}>2 s — recommended</option>
-              <option value={3000}>3 s</option>
-              <option value={4000}>4 s — gentlest</option>
+              <option value="1200">1.2 s — snappiest</option>
+              <option value="2000">2 s — recommended</option>
+              <option value="3000">3 s</option>
+              <option value="4000">4 s — gentlest</option>
             </select>
             <span className="muted">
               How often live text and Scripture matches update while someone
               is still speaking.
+            </span>
+          </label>
+          <label>
+            Automatic mode target display
+            <select
+              value={autoTarget}
+              onChange={(e) => changeAutoTarget(e.currentTarget.value)}
+            >
+              <option value="auto">First AUTO display</option>
+              {[1, 2, 3, 4, 5].map((n) => (
+                <option key={n} value={String(n)}>
+                  Always Display {n}
+                </option>
+              ))}
+            </select>
+            <span className="muted">
+              Which screen Automatic mode projects verified Scripture on. A
+              display set to LOCK is never taken over.
             </span>
           </label>
 
@@ -452,7 +483,7 @@ export default function VoicePage() {
             {mode === "assisted" &&
               "Scripture detected is shown here for you to approve."}
             {mode === "automatic" &&
-              "High-confidence verified matches project automatically to the first slot set to AUTO (Displays tab). UNDO is offered for 10 seconds."}
+              "High-confidence verified matches project automatically to the target display chosen above (default: first slot set to AUTO). UNDO is offered for 10 seconds."}
           </p>
           <button
             className={listening ? "danger" : "primary"}

@@ -60,6 +60,9 @@ export const voiceApi = {
   modelStatus: () => invoke<ModelStatus>("model_status"),
   sttModel: () => invoke<string>("get_stt_model"),
   setSttModel: (model: string) => invoke("set_stt_model", { model }),
+  /** "auto" (first AUTO slot) or a pinned "1".."5". */
+  autoTarget: () => invoke<string>("get_voice_auto_target"),
+  setAutoTarget: (target: string) => invoke("set_voice_auto_target", { target }),
   diagnostics: (seconds = 10) =>
     invoke<Record<string, unknown>>("run_voice_diagnostics", { seconds }),
 };
