@@ -1,4 +1,4 @@
-//! Bundled library seeding: KJV + ASV Bibles + public-domain hymn collection.
+//! Bundled library seeding: KJV + ASV + WEB Bibles + public-domain hymns.
 //! Runs once on first launch (when the content database is empty), and the
 //! Bible half re-runs when the bundled text is newer than the seeded one.
 
@@ -15,6 +15,10 @@ const ASV_JSON: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../resources/asv.json"
 ));
+const WEB_JSON: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../resources/web.json"
+));
 const HYMNS_JSON: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../resources/hymns.json"
@@ -22,7 +26,7 @@ const HYMNS_JSON: &str = include_str!(concat!(
 
 /// Bump when the bundled Bible text changes materially; existing databases
 /// re-seed their Bibles (hymns and user content untouched).
-pub const BIBLE_TEXT_VERSION: i64 = 2;
+pub const BIBLE_TEXT_VERSION: i64 = 4;
 
 /// Bump when bundled non-Bible seeds change; older databases re-seed the
 /// additions (additive, existing items refreshed by id).
@@ -124,6 +128,7 @@ fn seed_bible(tx: &Transaction, file: &str, translation: &str) -> Result<(), Con
 pub fn seed_bibles(tx: &Transaction) -> Result<(), ContentError> {
     seed_bible(tx, KJV_JSON, "KJV")?;
     seed_bible(tx, ASV_JSON, "ASV")?;
+    seed_bible(tx, WEB_JSON, "WEB")?;
     Ok(())
 }
 

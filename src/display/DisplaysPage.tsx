@@ -260,6 +260,7 @@ function SlotCard({
           <option value="">Off</option>
           <option value="kjv">KJV</option>
           <option value="asv">ASV</option>
+          <option value="web">WEB</option>
         </select>
       </label>
 

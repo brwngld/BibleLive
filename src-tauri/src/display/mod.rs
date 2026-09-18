@@ -486,7 +486,7 @@ impl DisplayManager {
     }
 
     pub fn set_pair_version(&self, slot: u8, version: Option<String>) {
-        let v = version.filter(|v| v == "kjv" || v == "asv");
+        let v = version.filter(|v| v == "kjv" || v == "asv" || v == "web");
         self.slots.lock()[(slot as usize).clamp(1, SLOT_COUNT) - 1].pair_version = v;
     }
 

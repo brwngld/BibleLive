@@ -642,7 +642,7 @@ async fn load_scripture_sections(
 /// "asv" → "bible-asv-1-corinthians". The same translation, or a
 /// non-Bible item, does not pair.
 fn companion_bible_id(item_id: &str, version: &str) -> Option<String> {
-    for from in ["kjv", "asv"] {
+    for from in ["kjv", "asv", "web"] {
         if let Some(book) = item_id.strip_prefix(&format!("bible-{from}-")) {
             return if from == version {
                 None
@@ -746,7 +746,7 @@ pub struct PairInput {
     pub version: Option<String>,
 }
 
-/// Turn two-version display on/off for a slot ("kjv" | "asv" | null).
+/// Turn two-version display on/off for a slot ("kjv" | "asv" | "web" | null).
 /// When scripture is already on the slot, the second column appears (or
 /// disappears) immediately at the current verse.
 #[tauri::command]
@@ -757,7 +757,7 @@ pub async fn set_slot_pair(
     input: PairInput,
 ) -> Result<(), String> {
     match input.version.as_deref() {
-        None | Some("kjv") | Some("asv") => {}
+        None | Some("kjv") | Some("asv") | Some("web") => {}
         Some(other) => return Err(format!("unknown version: {other}")),
     }
     mgr.set_pair_version(input.slot, input.version.clone());

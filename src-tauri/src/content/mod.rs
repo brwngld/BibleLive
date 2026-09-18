@@ -753,8 +753,8 @@ mod tests {
     fn seeds_and_searches_bundled_library() {
         let store = test_store("seed");
         let stats = store.stats().unwrap();
-        // 66 KJV + 66 ASV books + 12 hymns + 3 starter slide sets.
-        assert_eq!(stats["total"], serde_json::json!(147));
+        // 66 KJV + 66 ASV + 66 WEB books + 12 hymns + 3 starter slide sets.
+        assert_eq!(stats["total"], serde_json::json!(213));
 
         // Exact quotation should find John 3:16 in BOTH translations.
         let hits = store.search("For God so loved the world", 10).unwrap();
@@ -783,30 +783,31 @@ mod tests {
         let store = test_store("order");
         let bible = model::ItemType::Bible;
 
-        // Canonical: per bookNumber, ASV before KJV (title tiebreak);
-        // Genesis first, Revelation (KJV) last.
-        let items = store.list_items(Some(&bible), None, None, "canonical", 200, 0).unwrap();
-        assert_eq!(items.len(), 132); // 66 books × 2 translations
+        // Canonical: per bookNumber, ASV before KJV before WEB (title
+        // tiebreak); Genesis first, Revelation (WEB) last.
+        let items = store.list_items(Some(&bible), None, None, "canonical", 250, 0).unwrap();
+        assert_eq!(items.len(), 198); // 66 books × 3 translations
         assert_eq!(items.first().unwrap().title, "Genesis (ASV)");
         assert_eq!(items[1].title, "Genesis (KJV)");
-        assert_eq!(items.last().unwrap().title, "Revelation (KJV)");
-        // Matthew (book 40) pairs start at index 78; each book is adjacent.
+        assert_eq!(items[2].title, "Genesis (WEB)");
+        assert_eq!(items.last().unwrap().title, "Revelation (WEB)");
+        // Matthew (book 40) triplets start at index 117; adjacent.
         let matthew = items
             .iter()
             .position(|i| i.title == "Matthew (ASV)")
             .unwrap();
-        assert_eq!(matthew, 78);
+        assert_eq!(matthew, 117);
         assert_eq!(items[matthew + 1].title, "Matthew (KJV)");
 
-        // Old Testament: 39 books × 2, Genesis in, Matthew out.
-        let ot = store.list_items(Some(&bible), None, Some("ot"), "canonical", 200, 0).unwrap();
-        assert_eq!(ot.len(), 78);
+        // Old Testament: 39 books × 3, Genesis in, Matthew out.
+        let ot = store.list_items(Some(&bible), None, Some("ot"), "canonical", 250, 0).unwrap();
+        assert_eq!(ot.len(), 117);
         assert!(ot.iter().any(|i| i.title == "Genesis (KJV)"));
         assert!(!ot.iter().any(|i| i.title == "Matthew (KJV)"));
 
-        // New Testament: 27 books × 2, Matthew in, Malachi out.
-        let nt = store.list_items(Some(&bible), None, Some("nt"), "canonical", 200, 0).unwrap();
-        assert_eq!(nt.len(), 54);
+        // New Testament: 27 books × 3, Matthew in, Malachi out.
+        let nt = store.list_items(Some(&bible), None, Some("nt"), "canonical", 250, 0).unwrap();
+        assert_eq!(nt.len(), 81);
         assert!(nt.iter().any(|i| i.title == "Matthew (KJV)"));
         assert!(!nt.iter().any(|i| i.title == "Malachi (KJV)"));
 

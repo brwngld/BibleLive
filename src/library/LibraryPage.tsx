@@ -25,7 +25,7 @@ const TYPE_FILTERS: (ItemType | "all")[] = [
   "document",
 ];
 
-const BIBLE_VERSIONS = ["KJV", "ASV"] as const;
+const BIBLE_VERSIONS = ["KJV", "ASV", "WEB"] as const;
 
 export default function LibraryPage({
   autoOpenImport = 0,
