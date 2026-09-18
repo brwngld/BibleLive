@@ -434,6 +434,21 @@ function SlotCard({
                 <option value="left">Left</option>
               </select>
             </label>
+            <label>
+              Transition
+              <select
+                value={style.transition ?? "none"}
+                onChange={(e) =>
+                  updateStyle({
+                    transition: e.currentTarget.value as "none" | "fade" | "slide",
+                  })
+                }
+              >
+                <option value="none">None — instant</option>
+                <option value="fade">Fade</option>
+                <option value="slide">Slide in</option>
+              </select>
+            </label>
             <label className="check-row">
               <input
                 type="checkbox"

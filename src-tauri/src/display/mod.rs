@@ -65,6 +65,9 @@ pub struct SlotStyle {
     /// Soft shadow behind the text for legibility over busy images.
     #[serde(default = "default_text_shadow")]
     pub text_shadow: bool,
+    /// Transition when the content changes: "none" | "fade" | "slide".
+    #[serde(default = "default_transition")]
+    pub transition: String,
 }
 
 fn default_align() -> String {
@@ -73,6 +76,10 @@ fn default_align() -> String {
 
 fn default_text_shadow() -> bool {
     true
+}
+
+fn default_transition() -> String {
+    "none".into()
 }
 
 impl Default for SlotStyle {
@@ -85,6 +92,7 @@ impl Default for SlotStyle {
             bg_image: None,
             align: default_align(),
             text_shadow: true,
+            transition: default_transition(),
         }
     }
 }
@@ -103,6 +111,9 @@ impl SlotStyle {
         }
         if self.align != "left" {
             self.align = "center".into();
+        }
+        if self.transition != "fade" && self.transition != "slide" {
+            self.transition = "none".into();
         }
         self.bg_image = self
             .bg_image
@@ -725,6 +736,13 @@ mod tests {
         assert_eq!(s.align, "center");
         assert!(s.bg_image.is_none());
         assert!(s.text_shadow, "shadow defaults on to keep the classic look");
+        assert_eq!(s.transition, "none");
+        s.transition = "diagonal".into();
+        s.validate();
+        assert_eq!(s.transition, "none", "unknown transition falls back");
+        s.transition = "fade".into();
+        s.validate();
+        assert_eq!(s.transition, "fade", "valid transition survives");
         s.validate();
         assert_eq!(s.align, "center");
 

@@ -17,6 +17,10 @@ export default function OutputWindow({ slot }: { slot: number }) {
   const [showHint, setShowHint] = useState(true);
   const [toast, setToast] = useState<string | null>(null);
   const [viewport, setViewport] = useState({ w: window.innerWidth, h: window.innerHeight });
+  // Content-transition class ("out-anim-fade" / "out-anim-slide"), applied
+  // whenever the displayed text changes and the slot's style asks for one.
+  const [animClass, setAnimClass] = useState<string | null>(null);
+  const contentSig = useRef("");
   const prevActive = useRef(false);
   const toastTimer = useRef<number | undefined>(undefined);
   const scriptureRef = useRef<HTMLDivElement>(null);
@@ -44,6 +48,21 @@ export default function OutputWindow({ slot }: { slot: number }) {
     }).catch(console.error);
     return () => un?.();
   }, [slot]);
+
+  // Fire the configured transition when the displayed text changes.
+  // Blanking doesn't animate; restoring re-triggers like fresh content.
+  useEffect(() => {
+    const blank = !view || view.blank || view.kind === "blank";
+    const sig = blank ? "" : `${view.kind}|${view.label}|${view.title}|${view.lines.join("\u0001")}`;
+    if (sig === contentSig.current) return;
+    contentSig.current = sig;
+    const t = view?.style?.transition ?? "none";
+    if (!blank && (t === "fade" || t === "slide")) {
+      setAnimClass(`out-anim-${t}`);
+    } else {
+      setAnimClass(null);
+    }
+  }, [view]);
 
   // Re-fit on window resize (monitor changes, fullscreen transitions).
   useEffect(() => {
@@ -152,7 +171,8 @@ export default function OutputWindow({ slot }: { slot: number }) {
 
       {!blank && view.kind === "scripture" && view.pair && (
         <div
-          className="output-scripture output-pair"
+          className={"output-scripture output-pair" + (animClass ? " " + animClass : "")}
+          onAnimationEnd={() => setAnimClass(null)}
           style={{ textAlign: alignLeft ? "left" : "center", paddingLeft: alignLeft ? "5vw" : undefined }}
         >
           <div className="output-pair-row">
@@ -200,7 +220,8 @@ export default function OutputWindow({ slot }: { slot: number }) {
 
       {!blank && view.kind === "scripture" && !view.pair && (
         <div
-          className="output-scripture"
+          className={"output-scripture" + (animClass ? " " + animClass : "")}
+          onAnimationEnd={() => setAnimClass(null)}
           style={{ textAlign: alignLeft ? "left" : "center", paddingLeft: alignLeft ? "7vw" : undefined }}
         >
           <div
@@ -225,7 +246,8 @@ export default function OutputWindow({ slot }: { slot: number }) {
 
       {!blank && view.kind === "lyrics" && (
         <div
-          className="output-lyrics"
+          className={"output-lyrics" + (animClass ? " " + animClass : "")}
+          onAnimationEnd={() => setAnimClass(null)}
           style={{ textAlign: alignLeft ? "left" : "center", paddingLeft: alignLeft ? "7vw" : undefined }}
         >
           <div

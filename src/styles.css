@@ -1205,6 +1205,18 @@ input[type="color"] {
 .anim-fade { animation: reader-fade 0.35s ease-out; }
 .anim-slide { animation: reader-slide 0.3s ease-out; }
 
+/* Output content transitions (per-display, set in the style panel) */
+@keyframes out-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes out-slide {
+  from { opacity: 0; transform: translateX(40px); }
+  to { opacity: 1; transform: none; }
+}
+.out-anim-fade { animation: out-fade 0.4s ease-out; }
+.out-anim-slide { animation: out-slide 0.35s ease-out; }
+
 /* ---- Display slot compaction ---- */
 .slot-card .mode-row {
   display: flex;

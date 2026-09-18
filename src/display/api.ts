@@ -38,6 +38,8 @@ export interface SlotStyle {
   align?: "center" | "left";
   /** Soft shadow behind text for legibility over busy images. */
   textShadow?: boolean;
+  /** Transition when the content changes: "none" | "fade" | "slide". */
+  transition?: "none" | "fade" | "slide";
 }
 
 /** Presentation-type presets: style patches applied together. A preset
@@ -57,7 +59,7 @@ export const THEME_PRESETS: { name: string; hint: string; style: Partial<SlotSty
   },
   {
     name: "Cathedral",
-    hint: "Serif · warm parchment on deep blue · shadowed",
+    hint: "Serif · warm parchment on deep blue · shadowed · fades between verses",
     style: {
       fontFamily: "'Book Antiqua', 'Palatino Linotype', serif",
       fontSize: 6.0,
@@ -65,11 +67,12 @@ export const THEME_PRESETS: { name: string; hint: string; style: Partial<SlotSty
       bgColor: "#0a1230",
       align: "center",
       textShadow: true,
+      transition: "fade",
     },
   },
   {
     name: "Modern",
-    hint: "Clean sans · left-aligned · light on charcoal",
+    hint: "Clean sans · left-aligned · light on charcoal · slides between verses",
     style: {
       fontFamily: "'Segoe UI', sans-serif",
       fontSize: 5.5,
@@ -77,11 +80,12 @@ export const THEME_PRESETS: { name: string; hint: string; style: Partial<SlotSty
       bgColor: "#14161a",
       align: "left",
       textShadow: false,
+      transition: "slide",
     },
   },
   {
     name: "Lantern",
-    hint: "Large serif · amber on near-black · shadowed",
+    hint: "Large serif · amber on near-black · shadowed · fades between verses",
     style: {
       fontFamily: "Cambria, serif",
       fontSize: 7.5,
@@ -89,6 +93,7 @@ export const THEME_PRESETS: { name: string; hint: string; style: Partial<SlotSty
       bgColor: "#0b0805",
       align: "center",
       textShadow: true,
+      transition: "fade",
     },
   },
   {
