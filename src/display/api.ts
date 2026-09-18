@@ -12,7 +12,7 @@ export interface MonitorInfo {
 
 export type SlotContent = {
   slot: number;
-  kind: "scripture" | "lyrics" | "image" | "video" | "blank";
+  kind: "scripture" | "lyrics" | "slide" | "image" | "video" | "blank";
   title: string;
   label: string;
   lines: string[];

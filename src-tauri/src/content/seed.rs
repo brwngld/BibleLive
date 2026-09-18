@@ -24,6 +24,10 @@ const HYMNS_JSON: &str = include_str!(concat!(
 /// re-seed their Bibles (hymns and user content untouched).
 pub const BIBLE_TEXT_VERSION: i64 = 2;
 
+/// Bump when bundled non-Bible seeds change; older databases re-seed the
+/// additions (additive, existing items refreshed by id).
+pub const SLIDES_VERSION: i64 = 3;
+
 #[derive(serde::Deserialize)]
 struct KjvBook {
     name: String,
@@ -126,6 +130,87 @@ pub fn seed_bibles(tx: &Transaction) -> Result<(), ContentError> {
 /// Legacy entry point (empty database): bibles + hymns.
 pub fn seed_kjv(tx: &Transaction) -> Result<(), ContentError> {
     seed_bibles(tx)
+}
+
+/// Seed the built-in starter slide sets — editable examples so the Slide
+/// category is never empty. Re-runs refresh these ids in place; user-made
+/// slides are never touched.
+pub fn seed_slides(tx: &Transaction) -> Result<(), ContentError> {
+    let sets: [(&str, &str, &str, &[(&str, &[&str])]); 3] = [
+        (
+            "slide-welcome",
+            "Welcome",
+            "Starter set — edit for your church",
+            &[("Welcome", &["Welcome!", "We're glad you're here"])],
+        ),
+        (
+            "slide-announcements",
+            "Announcements",
+            "Starter set — edit for your church",
+            &[
+                ("Announcement 1", &["Bible study", "Friday · 6 pm"]),
+                ("Announcement 2", &["Choir practice", "Saturday · 10 am"]),
+            ],
+        ),
+        (
+            "slide-sermon-points",
+            "Sermon points",
+            "Starter set — edit for your church",
+            &[
+                ("Point 1", &["1. God's grace reaches everyone"]),
+                ("Point 2", &["2. Grace transforms us"]),
+                ("Point 3", &["3. Grace sends us out"]),
+            ],
+        ),
+    ];
+
+    for (id, title, note, sections) in sets {
+        // Refresh in place: these three ids are ours to manage.
+        tx.execute("DELETE FROM search_index WHERE item_id = ?1", rusqlite::params![id])?;
+        tx.execute("DELETE FROM search_fts WHERE item_id = ?1", rusqlite::params![id])?;
+        tx.execute("DELETE FROM content_items WHERE id = ?1", rusqlite::params![id])?;
+
+        let secs: Vec<serde_json::Value> = sections
+            .iter()
+            .map(|(label, lines)| {
+                json!({
+                    "label": label,
+                    "lines": lines.iter().map(|l| l.to_string()).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        tx.execute(
+            "INSERT INTO content_items
+                (id, item_type, title, language, license, visibility, metadata, body)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![
+                id,
+                "slide",
+                title,
+                "en",
+                "public-domain",
+                "public",
+                json!({ "note": note }).to_string(),
+                json!({ "sections": secs }).to_string(),
+            ],
+        )?;
+
+        for (i, (label, lines)) in sections.iter().enumerate() {
+            let text = lines.join(" ");
+            let key = super::model::section_key(label, i);
+            tx.execute(
+                "INSERT INTO search_index (item_id, section_key, section_label, text)
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![id, key, label, text],
+            )?;
+            tx.execute(
+                "INSERT INTO search_fts (text, section_label, item_id, section_key)
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![text, label, id, key],
+            )?;
+        }
+    }
+    Ok(())
 }
 
 /// Seed the public-domain hymn collection.

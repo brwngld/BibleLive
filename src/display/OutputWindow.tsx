@@ -75,7 +75,7 @@ export default function OutputWindow({ slot }: { slot: number }) {
   // With a paired second column, both shrink together to one shared size.
   useEffect(() => {
     const kind = view?.kind;
-    if (kind !== "scripture" && kind !== "lyrics") return;
+    if (kind !== "scripture" && kind !== "lyrics" && kind !== "slide") return;
     const style = view?.style;
     const baseVw = kind === "lyrics" ? (style?.fontSize ?? 6.5) * 0.72 : style?.fontSize ?? 6.5;
     const els = [kind === "lyrics" ? lyricsRef.current : scriptureRef.current, pairRef.current].filter(
@@ -150,7 +150,7 @@ export default function OutputWindow({ slot }: { slot: number }) {
   const size = style?.fontSize ?? 6.5;
   const textColor = style?.textColor ?? "#ffffff";
   const bgColor = style?.bgColor ?? "#000000";
-  const isText = !blank && (view.kind === "scripture" || view.kind === "lyrics");
+  const isText = !blank && (view.kind === "scripture" || view.kind === "lyrics" || view.kind === "slide");
   const alignLeft = style?.align === "left";
   const shadowCss = (style?.textShadow ?? true) ? "0 2px 14px rgba(0, 0, 0, 0.85)" : "none";
 
@@ -218,7 +218,7 @@ export default function OutputWindow({ slot }: { slot: number }) {
         </div>
       )}
 
-      {!blank && view.kind === "scripture" && !view.pair && (
+      {!blank && (view.kind === "scripture" || view.kind === "slide") && !view.pair && (
         <div
           className={"output-scripture" + (animClass ? " " + animClass : "")}
           onAnimationEnd={() => setAnimClass(null)}

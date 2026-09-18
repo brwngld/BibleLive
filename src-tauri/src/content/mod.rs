@@ -132,9 +132,17 @@ impl ContentStore {
             tx.commit()?;
         }
 
+        // Newer bundled seeds (starter slides): additive, refreshes only
+        // the built-in ids.
+        if version > 0 && version < seed::SLIDES_VERSION {
+            let tx = conn.transaction()?;
+            seed::seed_slides(&tx)?;
+            tx.commit()?;
+        }
+
         conn.execute_batch(&format!(
             "PRAGMA user_version = {};",
-            seed::BIBLE_TEXT_VERSION.max(1)
+            seed::SLIDES_VERSION.max(seed::BIBLE_TEXT_VERSION).max(1)
         ))?;
         let store = Self {
             conn: Arc::new(parking_lot::Mutex::new(conn)),
@@ -169,6 +177,7 @@ impl ContentStore {
         let tx = conn.transaction()?;
         seed::seed_kjv(&tx)?;
         seed::seed_hymns(&tx)?;
+        seed::seed_slides(&tx)?;
         tx.commit()?;
         Ok(())
     }
@@ -644,8 +653,8 @@ mod tests {
     fn seeds_and_searches_bundled_library() {
         let store = test_store("seed");
         let stats = store.stats().unwrap();
-        // 66 KJV + 66 ASV books + 12 hymns.
-        assert_eq!(stats["total"], serde_json::json!(144));
+        // 66 KJV + 66 ASV books + 12 hymns + 3 starter slide sets.
+        assert_eq!(stats["total"], serde_json::json!(147));
 
         // Exact quotation should find John 3:16 in BOTH translations.
         let hits = store.search("For God so loved the world", 10).unwrap();
@@ -760,7 +769,8 @@ mod tests {
     fn slide_sections_roundtrip() {
         let store = test_store("slide");
         let item = model::ContentItem {
-            id: "slide-welcome".into(),
+            // distinct from the seeded starter ids (slide-welcome etc.)
+            id: "slide-test-custom".into(),
             item_type: model::ItemType::Slide,
             title: "Welcome".into(),
             language: "en".into(),
@@ -780,10 +790,10 @@ mod tests {
 
         // Searchable like everything else.
         let hits = store.search("glad you are here", 5).unwrap();
-        assert!(hits.iter().any(|h| h.item_id == "slide-welcome" && h.section_label == "Welcome"));
+        assert!(hits.iter().any(|h| h.item_id == "slide-test-custom" && h.section_label == "Welcome"));
 
         // The projector loads sections by key ("{slug}-{n}") and walks them.
-        let found = store.get_song_sections("slide-welcome", "welcome-1").unwrap();
+        let found = store.get_song_sections("slide-test-custom", "welcome-1").unwrap();
         let (idx, sections) = found.expect("slide sections load");
         assert_eq!(idx, 0);
         assert_eq!(sections.len(), 2);
@@ -794,7 +804,7 @@ mod tests {
 
         // Starting from the second slide positions there.
         let (idx, _) = store
-            .get_song_sections("slide-welcome", "announcement-2")
+            .get_song_sections("slide-test-custom", "announcement-2")
             .unwrap()
             .expect("second slide key resolves");
         assert_eq!(idx, 1);

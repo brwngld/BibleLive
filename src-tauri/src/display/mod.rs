@@ -44,6 +44,8 @@ impl DisplayMode {
 pub enum RenderKind {
     Scripture,
     Lyrics,
+    /// Custom slides — rendered like scripture but stepped line by line.
+    Slide,
 }
 
 /// Per-slot display typography and colors. `font_size` is in vw units
@@ -137,15 +139,25 @@ pub struct SectionedContent {
     title: String,
     sections: Vec<LabeledSection>,
     index: usize,
+    /// How many lines of the current section are revealed. `usize::MAX`
+    /// means all (scripture, lyrics). Slides start at 1 and grow with
+    /// Next — the line-by-line reveal.
+    reveal: usize,
 }
 
 impl SectionedContent {
     pub fn new(item_id: String, kind: RenderKind, title: String, sections: Vec<LabeledSection>) -> Self {
-        Self { item_id, kind, title, sections, index: 0 }
+        Self { item_id, kind, title, sections, index: 0, reveal: usize::MAX }
     }
 
     pub fn with_index(item_id: String, kind: RenderKind, title: String, sections: Vec<LabeledSection>, index: usize) -> Self {
-        Self { item_id, kind, title, sections, index }
+        Self { item_id, kind, title, sections, index, reveal: usize::MAX }
+    }
+
+    /// Slides start showing only the first line of the section.
+    pub fn revealing_first_line(mut self) -> Self {
+        self.reveal = 1;
+        self
     }
 
     pub fn current_key(&self) -> Option<&str> {
@@ -321,13 +333,25 @@ fn content_event(slot: u8, state: &SlotState) -> SlotContentEvent {
         },
         Some(SlotContent::Sections(c)) => {
             let sec = &c.sections[c.index.min(c.sections.len() - 1)];
+            let shown = if c.reveal >= sec.lines.len() {
+                &sec.lines[..]
+            } else {
+                &sec.lines[..c.reveal.max(1)]
+            };
+            let page = if c.kind == RenderKind::Slide {
+                // Slides reveal line by line: show both positions.
+                let line = c.reveal.min(sec.lines.len());
+                format!("{} of {} · line {} of {}", c.index + 1, c.sections.len(), line, sec.lines.len())
+            } else {
+                format!("{} of {}", c.index + 1, c.sections.len())
+            };
             let mut ev = SlotContentEvent {
                 slot,
                 kind: format!("{:?}", c.kind).to_lowercase(),
                 title: c.title.clone(),
                 label: sec.label.clone(),
-                lines: sec.lines.clone(),
-                page: Some(format!("{} of {}", c.index + 1, c.sections.len())),
+                lines: shown.to_vec(),
+                page: Some(page),
                 image_path: None,
                 video_path: None,
                 blank: false,
@@ -585,8 +609,10 @@ impl DisplayManager {
         slots[(slot as usize).clamp(1, SLOT_COUNT) - 1].degraded = degraded;
     }
 
-    /// Advance within the sectioned content. The paired version (if any)
-    /// follows verse-for-verse. Returns true if moved.
+    /// Advance within the sectioned content. Slides reveal line by line:
+    /// Next adds a line, then moves on; Prev takes a line back, then the
+    /// previous slide's last reveal. The paired version (if any) follows
+    /// verse-for-verse. Returns true if moved.
     pub fn step(&self, slot: u8, delta: i32) -> bool {
         let mut slots = self.slots.lock();
         let st = &mut slots[(slot as usize).clamp(1, SLOT_COUNT) - 1];
@@ -600,11 +626,30 @@ impl DisplayManager {
         if c.sections.is_empty() {
             return false;
         }
+        // Line-by-line reveal for slides (before crossing to another slide).
+        if c.kind == RenderKind::Slide {
+            let len = c.sections[c.index.min(c.sections.len() - 1)].lines.len();
+            if delta > 0 && c.reveal < len {
+                c.reveal += 1;
+                return true;
+            }
+            if delta < 0 && c.reveal > 1 {
+                c.reveal -= 1;
+                return true;
+            }
+        }
         let next = c.index as i32 + delta;
         if next < 0 || next >= c.sections.len() as i32 {
             return false;
         }
         c.index = next as usize;
+        c.reveal = if c.kind == RenderKind::Slide {
+            // Entering forward shows the first line; coming back shows the
+            // whole slide (you were heading to the previous one).
+            if delta < 0 { c.sections[c.index].lines.len().max(1) } else { 1 }
+        } else {
+            usize::MAX
+        };
         let key = c.current_key().map(str::to_string);
         if let (Some(key), Some(pair)) = (key, &mut st.pair) {
             pair.seek_key(&key); // absent key: pair stays on its verse
@@ -865,6 +910,63 @@ mod tests {
         assert_eq!(version_tag("1 Corinthians (ASV)").as_deref(), Some("ASV"));
         assert_eq!(version_tag("Amazing Grace"), None);
         assert_eq!(version_tag("Weird ("), None);
+    }
+
+    /// Slides reveal line by line: Next adds a line, then moves to the
+    /// next slide (first line only); Prev takes a line back, then steps
+    /// to the previous slide's full reveal. Scripture/lyrics are unchanged
+    /// (whole section at once).
+    #[test]
+    fn slide_reveals_line_by_line() {
+        let mgr = DisplayManager::new();
+        let slides = SectionedContent::new(
+            "slide-x".into(),
+            RenderKind::Slide,
+            "Points".into(),
+            vec![
+                sec("p1", "Point 1", "first"),
+                sec("p2", "Point 2", "second"),
+                sec("p3", "Point 3", "third"),
+            ],
+        )
+        .revealing_first_line();
+        // Give slide 1 three lines; the test helper only writes one line
+        // per section, so patch it directly through set_sections payload.
+        let mut multi = slides.clone();
+        if let Some(first) = multi.sections.get_mut(0) {
+            first.lines = vec!["line one".into(), "line two".into(), "line three".into()];
+        }
+        mgr.set_sections(1, multi);
+
+        let ev = content_event(1, &mgr.slots.lock()[0]);
+        assert_eq!(ev.lines, vec!["line one".to_string()], "starts on the first line");
+        assert_eq!(ev.page.as_deref(), Some("1 of 3 · line 1 of 3"));
+
+        assert!(mgr.step(1, 1));
+        let ev = content_event(1, &mgr.slots.lock()[0]);
+        assert_eq!(ev.lines, vec!["line one".to_string(), "line two".to_string()]);
+        assert_eq!(ev.page.as_deref(), Some("1 of 3 · line 2 of 3"));
+
+        // Past the last line → next slide, first line only.
+        assert!(mgr.step(1, 1));
+        assert!(mgr.step(1, 1));
+        let ev = content_event(1, &mgr.slots.lock()[0]);
+        assert_eq!(ev.label, "Point 2");
+        assert_eq!(ev.lines, vec!["second".to_string()]);
+        assert_eq!(ev.page.as_deref(), Some("2 of 3 · line 1 of 1"));
+
+        // Back: one-line slide → previous slide fully revealed.
+        assert!(mgr.step(1, -1));
+        let ev = content_event(1, &mgr.slots.lock()[0]);
+        assert_eq!(ev.label, "Point 1");
+        assert_eq!(ev.lines.len(), 3, "previous slide restores full reveal");
+        assert_eq!(ev.page.as_deref(), Some("1 of 3 · line 3 of 3"));
+
+        // Scripture still shows whole sections and pages plainly.
+        mgr.set_sections(2, scripture("bible-kjv-john", "John (KJV)", &["john.3.16", "john.3.17"], 0));
+        assert!(mgr.step(2, 1));
+        let ev = content_event(2, &mgr.slots.lock()[1]);
+        assert_eq!(ev.page.as_deref(), Some("2 of 2"), "no line counting for scripture");
     }
 
     /// Theme templates: upsert by name, delete, and style validation on

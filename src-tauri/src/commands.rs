@@ -118,6 +118,7 @@ fn parse_item_type(s: &str) -> Option<ItemType> {
         "hymn" => Some(ItemType::Hymn),
         "book" => Some(ItemType::Book),
         "document" => Some(ItemType::Document),
+        "slide" => Some(ItemType::Slide),
         _ => None,
     }
 }
@@ -779,11 +780,13 @@ pub async fn set_slot_section(
         .as_ref()
         .map(|i| i.title.clone())
         .unwrap_or_else(|| "Lyrics".into());
-    // Slides render scripture-style (one big centered block per slide);
-    // songs/hymns render lyric-style (listed lines).
-    let render_kind = match item.as_ref().map(|i| i.item_type) {
-        Some(ItemType::Slide) => RenderKind::Scripture,
-        _ => RenderKind::Lyrics,
+    // Slides render scripture-style (one big centered block) but reveal
+    // line by line; songs/hymns render lyric-style (listed lines).
+    let is_slide = item.as_ref().map(|i| i.item_type) == Some(ItemType::Slide);
+    let render_kind = if is_slide {
+        RenderKind::Slide
+    } else {
+        RenderKind::Lyrics
     };
 
     let label = sections
@@ -791,15 +794,22 @@ pub async fn set_slot_section(
         .map(|sec| sec.label.clone())
         .unwrap_or_default();
     let rec_title = title.clone();
+    let content = SectionedContent::with_index(
+        input.item_id.clone(),
+        render_kind,
+        title,
+        sections,
+        index,
+    );
     mgr.set_sections(
         input.slot,
-        SectionedContent::with_index(input.item_id.clone(), render_kind, title, sections, index),
+        if is_slide { content.revealing_first_line() } else { content },
     );
     record_item(
         &store,
         &service,
         input.slot,
-        if render_kind == RenderKind::Scripture { "slide" } else { "lyrics" },
+        if is_slide { "slide" } else { "lyrics" },
         &rec_title,
         &label,
     );
