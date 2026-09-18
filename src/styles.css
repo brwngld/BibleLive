@@ -208,6 +208,55 @@ textarea:focus {
   gap: 4px;
   font-size: 0.9em;
 }
+
+/* ---- Slide editor (custom slides) ---- */
+
+.slide-editor {
+  min-width: 420px;
+  max-width: 560px;
+  max-height: 86vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.slide-editor h2 {
+  margin: 0;
+}
+.slide-title-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.85em;
+  color: #94a3b8;
+}
+.slide-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.slide-row {
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.slide-row-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.8em;
+}
+.slide-row textarea {
+  resize: vertical;
+  min-height: 56px;
+}
+.slide-add {
+  align-self: flex-start;
+  font-size: 0.85em;
+}
 .app-main {
   flex: 1;
   overflow: hidden;

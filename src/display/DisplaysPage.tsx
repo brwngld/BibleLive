@@ -21,7 +21,9 @@ export default function DisplaysPage() {
   const [profiles, setProfiles] = useState<DisplayProfile[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [newProfileName, setNewProfileName] = useState("");
-  const [picker, setPicker] = useState<{ slot: number; kind: "scripture" | "lyrics" } | null>(null);
+  const [picker, setPicker] = useState<
+    { slot: number; kind: "scripture" | "lyrics" | "slide" } | null
+  >(null);
 
   const refresh = useCallback(() => {
     displayApi.slots().then(setSlots).catch(console.error);
@@ -135,7 +137,7 @@ function SlotCard({
   monitors: MonitorInfo[];
   onChanged: () => void;
   onError: (e: string) => void;
-  openPicker: (kind: "scripture" | "lyrics") => void;
+  openPicker: (kind: "scripture" | "lyrics" | "slide") => void;
 }) {
   const c = view.content;
   const [style, setStyle] = useState<SlotStyle>(c.style);
@@ -341,6 +343,7 @@ function SlotCard({
       <div className="slot-controls compact">
         <button onClick={() => openPicker("scripture")}>📖 Scripture…</button>
         <button onClick={() => openPicker("lyrics")}>🎵 Lyrics…</button>
+        <button onClick={() => openPicker("slide")}>📝 Slide…</button>
         <button
           onClick={() =>
             act(async () => {
@@ -485,7 +488,7 @@ function ContentPickerDialog({
   onClose,
   onPicked,
 }: {
-  kind: "scripture" | "lyrics";
+  kind: "scripture" | "lyrics" | "slide";
   slot: number;
   onClose: () => void;
   onPicked: () => void;
@@ -511,6 +514,8 @@ function ContentPickerDialog({
         setItems(r);
         lib.listContent({ itemType: "song" }).then((s) => setItems((prev) => [...prev, ...s]));
       });
+    } else if (kind === "slide") {
+      lib.listContent({ itemType: "slide" }).then(setItems);
     } else {
       lib
         .listContent({ itemType: "bible", sort: "canonical" })
@@ -565,7 +570,8 @@ function ContentPickerDialog({
       setHits(results.filter((h) => h.itemType === "bible"));
     } else {
       const results = await lib.searchContent(query);
-      setHits(results.filter((h) => h.itemType === "hymn" || h.itemType === "song"));
+      const types = kind === "slide" ? ["slide"] : ["hymn", "song"];
+      setHits(results.filter((h) => types.includes(h.itemType)));
       setItems(items.filter((i) => i.title.toLowerCase().includes(query.toLowerCase())));
     }
   }
@@ -608,7 +614,8 @@ function ContentPickerDialog({
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h2>
-          {kind === "scripture" ? "📖 Scripture" : "🎵 Lyrics"} → Display {slot}
+          {kind === "scripture" ? "📖 Scripture" : kind === "lyrics" ? "🎵 Lyrics" : "📝 Slides"} →
+          Display {slot}
         </h2>
         {kind === "scripture" && (
           <div className="type-tabs">
@@ -711,7 +718,9 @@ function ContentPickerDialog({
                 placeholder={
                   kind === "scripture"
                     ? "Reference or words… e.g. John 3:16 / for God so loved"
-                    : "Search hymns & songs…"
+                    : kind === "slide"
+                      ? "Search slides…"
+                      : "Search hymns & songs…"
                 }
               />
               <button onClick={runSearch}>Search</button>
@@ -725,21 +734,21 @@ function ContentPickerDialog({
                     <div className="hit-snippet" dangerouslySetInnerHTML={{ __html: h.snippet }} />
                   </button>
                 ))}
-              {kind === "lyrics" &&
+              {kind !== "scripture" &&
                 !selected &&
                 items.map((i) => (
                   <button key={i.id} className="hit-row" onClick={() => selectItem(i)}>
                     <b>{i.title}</b> <span className="muted">{i.itemType}</span>
                   </button>
                 ))}
-              {kind === "lyrics" &&
+              {kind !== "scripture" &&
                 selected &&
                 detail.map((d) => (
                   <button key={d.key} className="hit-row" onClick={() => choose(undefined, d.key)}>
                     <b>{d.label}</b>
                   </button>
                 ))}
-              {kind === "lyrics" && selected && (
+              {kind !== "scripture" && selected && (
                 <button className="muted" onClick={() => setSelected(null)}>
                   ← back to song list
                 </button>

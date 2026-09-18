@@ -774,13 +774,17 @@ pub async fn set_slot_section(
     let Some((index, sections)) = found else {
         return Err("no sections matched that key".into());
     };
-    let title = store
-        .inner()
-        .get_item(&input.item_id)
-        .ok()
-        .flatten()
-        .map(|i| i.title)
+    let item = store.inner().get_item(&input.item_id).ok().flatten();
+    let title = item
+        .as_ref()
+        .map(|i| i.title.clone())
         .unwrap_or_else(|| "Lyrics".into());
+    // Slides render scripture-style (one big centered block per slide);
+    // songs/hymns render lyric-style (listed lines).
+    let render_kind = match item.as_ref().map(|i| i.item_type) {
+        Some(ItemType::Slide) => RenderKind::Scripture,
+        _ => RenderKind::Lyrics,
+    };
 
     let label = sections
         .get(index.min(sections.len() - 1))
@@ -789,9 +793,16 @@ pub async fn set_slot_section(
     let rec_title = title.clone();
     mgr.set_sections(
         input.slot,
-        SectionedContent::with_index(input.item_id.clone(), RenderKind::Lyrics, title, sections, index),
+        SectionedContent::with_index(input.item_id.clone(), render_kind, title, sections, index),
     );
-    record_item(&store, &service, input.slot, "lyrics", &rec_title, &label);
+    record_item(
+        &store,
+        &service,
+        input.slot,
+        if render_kind == RenderKind::Scripture { "slide" } else { "lyrics" },
+        &rec_title,
+        &label,
+    );
     display::emit_slot(&app, input.slot, &mgr);
     Ok(())
 }

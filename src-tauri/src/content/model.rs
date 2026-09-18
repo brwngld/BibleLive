@@ -12,6 +12,10 @@ pub enum ItemType {
     Hymn,
     Book,
     Document,
+    /// Custom slides: welcome screens, announcements, sermon points.
+    /// Body is `{ sections: [{ label, lines }] }` like songs — each
+    /// section is one slide, walked with Next/Prev.
+    Slide,
 }
 
 impl ItemType {
@@ -22,6 +26,7 @@ impl ItemType {
             ItemType::Hymn => "hymn",
             ItemType::Book => "book",
             ItemType::Document => "document",
+            ItemType::Slide => "slide",
         }
     }
 
@@ -31,6 +36,7 @@ impl ItemType {
             "hymn" => ItemType::Hymn,
             "book" => ItemType::Book,
             "document" => ItemType::Document,
+            "slide" => ItemType::Slide,
             _ => ItemType::Bible,
         }
     }

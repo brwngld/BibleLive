@@ -11,6 +11,10 @@ export async function getStats(): Promise<LibraryStats> {
   return invoke<LibraryStats>("library_stats");
 }
 
+export async function createContent(item: ContentItem): Promise<void> {
+  return invoke("create_content", { item });
+}
+
 export async function listContent(filter: {
   itemType?: string | null;
   titleQuery?: string | null;

@@ -754,6 +754,52 @@ mod tests {
         assert!(sections[15].lines[0].contains("For God so loved"));
     }
 
+    /// Custom slides: a slide item's sections index, search, and load
+    /// through the same section path the projector uses.
+    #[test]
+    fn slide_sections_roundtrip() {
+        let store = test_store("slide");
+        let item = model::ContentItem {
+            id: "slide-welcome".into(),
+            item_type: model::ItemType::Slide,
+            title: "Welcome".into(),
+            language: "en".into(),
+            license: "public-domain".into(),
+            visibility: "public".into(),
+            metadata: serde_json::json!({}),
+            body: serde_json::json!({
+                "sections": [
+                    { "label": "Welcome", "lines": ["Welcome to church", "We are glad you are here"] },
+                    { "label": "Announcement", "lines": ["Bible study on Friday at 6 pm"] },
+                ]
+            }),
+        };
+        store.insert_item(&item).unwrap();
+
+        assert_eq!(model::ItemType::from_str_lossy("slide"), model::ItemType::Slide);
+
+        // Searchable like everything else.
+        let hits = store.search("glad you are here", 5).unwrap();
+        assert!(hits.iter().any(|h| h.item_id == "slide-welcome" && h.section_label == "Welcome"));
+
+        // The projector loads sections by key ("{slug}-{n}") and walks them.
+        let found = store.get_song_sections("slide-welcome", "welcome-1").unwrap();
+        let (idx, sections) = found.expect("slide sections load");
+        assert_eq!(idx, 0);
+        assert_eq!(sections.len(), 2);
+        assert_eq!(sections[0].key, "welcome-1");
+        assert_eq!(sections[1].key, "announcement-2");
+        assert_eq!(sections[1].label, "Announcement");
+        assert_eq!(sections[1].lines, vec!["Bible study on Friday at 6 pm".to_string()]);
+
+        // Starting from the second slide positions there.
+        let (idx, _) = store
+            .get_song_sections("slide-welcome", "announcement-2")
+            .unwrap()
+            .expect("second slide key resolves");
+        assert_eq!(idx, 1);
+    }
+
     #[test]
     fn docx_import() {
         // Build a minimal .docx (zip containing word/document.xml) in temp.

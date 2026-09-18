@@ -1,4 +1,4 @@
-export type ItemType = "bible" | "song" | "hymn" | "book" | "document";
+export type ItemType = "bible" | "song" | "hymn" | "book" | "document" | "slide";
 
 export interface Section {
   label: string;
@@ -62,6 +62,7 @@ export const ITEM_TYPE_LABELS: Record<ItemType, string> = {
   hymn: "Hymn",
   book: "Book",
   document: "Document",
+  slide: "Slide",
 };
 
 export const LICENSE_OPTIONS = [

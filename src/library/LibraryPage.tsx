@@ -20,6 +20,7 @@ const TYPE_FILTERS: (ItemType | "all")[] = [
   "bible",
   "hymn",
   "song",
+  "slide",
   "book",
   "document",
 ];
@@ -49,6 +50,11 @@ export default function LibraryPage({
 
   // import state
   const [showImport, setShowImport] = useState(false);
+
+  // slide editor: new, or editing an existing slide item
+  const [slideEdit, setSlideEdit] = useState<
+    { mode: "new" } | { mode: "edit"; item: ContentItem } | null
+  >(null);
 
   useEffect(() => {
     if (autoOpenImport > 0) setShowImport(true);
@@ -130,6 +136,9 @@ export default function LibraryPage({
             </option>
           ))}
         </select>
+        <button onClick={() => setSlideEdit({ mode: "new" })} title="Create a custom slide — welcome screen, announcement, sermon point">
+          📝 New slide
+        </button>
         <button className="primary" onClick={() => setShowImport(true)}>
           ＋ Import / Add
         </button>
@@ -246,7 +255,9 @@ export default function LibraryPage({
               onChanged={() => {
                 refreshList();
                 refreshStats();
+                selectItem(selected.id);
               }}
+              onEditSlides={(it) => setSlideEdit({ mode: "edit", item: it })}
               onDeleted={() => {
                 setSelected(null);
                 refreshList();
@@ -270,6 +281,19 @@ export default function LibraryPage({
           }}
         />
       )}
+
+      {slideEdit && (
+        <SlideEditorDialog
+          edit={slideEdit.mode === "edit" ? slideEdit.item : null}
+          onClose={() => setSlideEdit(null)}
+          onSaved={(id) => {
+            setSlideEdit(null);
+            refreshList();
+            refreshStats();
+            selectItem(id);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -279,12 +303,14 @@ function ItemDetail({
   focusVerse,
   onOpenItem,
   onChanged,
+  onEditSlides,
   onDeleted,
 }: {
   item: ContentItem;
   focusVerse: string | null;
   onOpenItem: (id: string) => void;
   onChanged: () => void;
+  onEditSlides: (item: ContentItem) => void;
   onDeleted: () => void;
 }) {
   const [draft, setDraft] = useState<ContentItem>(item);
@@ -376,6 +402,11 @@ function ItemDetail({
             {item.visibility === "private" ? " · 🔒 private" : ""}
           </div>
           <div className="form-actions">
+            {item.itemType === "slide" && (
+              <button className="primary" onClick={() => onEditSlides(item)}>
+                ✎ Edit slides
+              </button>
+            )}
             <button onClick={() => setEditing(true)}>Edit</button>
             <button className="danger" onClick={onDeleted}>
               Delete
@@ -715,6 +746,146 @@ function ImportDialog({
         <div className="form-actions">
           <button className="primary" onClick={doImport} disabled={busy}>
             {busy ? "Importing…" : "Import"}
+          </button>
+          <button onClick={onClose}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Create/edit a custom slide item — welcome screens, announcements,
+ *  sermon points. Each section is one slide; the projector walks them
+ *  with Next/Prev. */
+function SlideEditorDialog({
+  edit,
+  onClose,
+  onSaved,
+}: {
+  edit: ContentItem | null;
+  onClose: () => void;
+  onSaved: (id: string) => void;
+}) {
+  const fromExisting = edit?.itemType === "slide" ? edit : null;
+  const [title, setTitle] = useState(fromExisting?.title ?? "");
+  const [slides, setSlides] = useState<{ label: string; text: string }[]>(
+    fromExisting
+      ? (fromExisting.body.sections ?? []).map((s) => ({
+          label: s.label,
+          text: s.lines.join("\n"),
+        }))
+      : [{ label: "", text: "" }],
+  );
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function setSlide(i: number, patch: Partial<{ label: string; text: string }>) {
+    setSlides((prev) => prev.map((s, j) => (j === i ? { ...s, ...patch } : s)));
+  }
+
+  async function save() {
+    const name = title.trim();
+    if (!name) {
+      setError("Give the slide set a title (e.g., Welcome).");
+      return;
+    }
+    const clean = slides.filter((s) => s.label.trim() || s.text.trim());
+    if (clean.length === 0) {
+      setError("Add at least one slide.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const id =
+        fromExisting?.id ??
+        `slide-${name
+          .toLowerCase()
+          .split(/[^a-z0-9]+/)
+          .filter(Boolean)
+          .join("-")}-${Date.now() % 10000}`;
+      const item: ContentItem = {
+        id,
+        itemType: "slide",
+        title: name,
+        language: fromExisting?.language ?? "en",
+        license: fromExisting?.license ?? "public-domain",
+        visibility: fromExisting?.visibility ?? "public",
+        metadata: fromExisting?.metadata ?? {},
+        body: {
+          sections: clean.map((s, i) => ({
+            label: s.label.trim() || `Slide ${i + 1}`,
+            lines: s.text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean),
+          })),
+        },
+      };
+      if (fromExisting) {
+        await api.updateContent(item);
+      } else {
+        await api.createContent(item);
+      }
+      onSaved(id);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal slide-editor" onClick={(e) => e.stopPropagation()}>
+        <h2>{fromExisting ? "✎ Edit slides" : "📝 New slide"}</h2>
+        <label className="slide-title-row">
+          Title
+          <input
+            autoFocus
+            value={title}
+            onChange={(e) => setTitle(e.currentTarget.value)}
+            placeholder="e.g., Welcome / Announcements / Sermon points"
+            onKeyDown={(e) => e.key === "Enter" && save()}
+          />
+        </label>
+
+        <div className="slide-list">
+          {slides.map((s, i) => (
+            <div className="slide-row" key={i}>
+              <div className="slide-row-head">
+                <span className="muted">Slide {i + 1}</span>
+                <button
+                  className="danger"
+                  title="Remove this slide"
+                  disabled={slides.length === 1}
+                  onClick={() => setSlides((prev) => prev.filter((_, j) => j !== i))}
+                >
+                  ✕
+                </button>
+              </div>
+              <input
+                value={s.label}
+                onChange={(e) => setSlide(i, { label: e.currentTarget.value })}
+                placeholder="Heading (optional — shown small under the text)"
+              />
+              <textarea
+                value={s.text}
+                onChange={(e) => setSlide(i, { text: e.currentTarget.value })}
+                placeholder={"What this slide says…\nOne line per displayed line"}
+                rows={3}
+              />
+            </div>
+          ))}
+        </div>
+        <button
+          className="slide-add"
+          onClick={() => setSlides((prev) => [...prev, { label: "", text: "" }])}
+        >
+          ＋ Add slide
+        </button>
+
+        {error && <div className="error">{error}</div>}
+        <div className="form-actions">
+          <button className="primary" onClick={save} disabled={busy}>
+            {busy ? "Saving…" : fromExisting ? "Save changes" : "Create"}
           </button>
           <button onClick={onClose}>Cancel</button>
         </div>
