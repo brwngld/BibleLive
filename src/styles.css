@@ -257,6 +257,24 @@ textarea:focus {
   align-self: flex-start;
   font-size: 0.85em;
 }
+
+/* Transient status notice (backup done, restore failed…) */
+.notice-bar {
+  position: fixed;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  z-index: 80;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  max-width: 70vw;
+}
 .app-main {
   flex: 1;
   overflow: hidden;

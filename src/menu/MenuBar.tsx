@@ -13,6 +13,8 @@ export type MenuAction =
   | { kind: "micTest" }
   | { kind: "diagnostics" }
   | { kind: "openDataFolder" }
+  | { kind: "backup" }
+  | { kind: "restore" }
   | { kind: "shortcuts" }
   | { kind: "exit" };
 
@@ -82,6 +84,8 @@ export default function MenuBar({ onAction }: { onAction: (a: MenuAction) => voi
       sep: i === 0,
     })),
     { label: "Manage display profiles…", action: { kind: "manageProfiles" }, sep: true },
+    { label: "Backup data…", action: { kind: "backup" } },
+    { label: "Restore from backup…", action: { kind: "restore" } },
     { label: "Exit", action: { kind: "exit" }, sep: true },
   ];
 

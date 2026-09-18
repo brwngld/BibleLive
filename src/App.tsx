@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import LibraryPage from "./library/LibraryPage";
 import VoicePage from "./voice/VoicePage";
 import DisplaysPage from "./display/DisplaysPage";
@@ -25,6 +26,11 @@ export default function App() {
   // Bumped each time File → Import is used; LibraryPage opens its import
   // dialog on change (works both from another tab and while on Library).
   const [importRequest, setImportRequest] = useState(0);
+  // Backup/restore: pending restore path awaits confirmation; notice is a
+  // transient status message.
+  const [confirmRestore, setConfirmRestore] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   // Ctrl+1..4 switches pages in the operator window only — display
   // outputs are separate windows and never see these keys.
@@ -70,6 +76,34 @@ export default function App() {
       case "openDataFolder":
         invoke("open_data_folder").catch(console.error);
         break;
+      case "backup":
+        setBusy(true);
+        saveDialog({
+          defaultPath: `biblelive-backup-${new Date().toISOString().slice(0, 10)}.json`,
+          filters: [{ name: "BibleLive backup", extensions: ["json"] }],
+        })
+          .then((path) => {
+            if (typeof path === "string") {
+              return invoke<number>("backup_data", { path }).then((bytes) =>
+                setNotice(
+                  `Backup saved — ${(bytes / 1048576).toFixed(1)} MB. Keep the file somewhere safe.`,
+                ),
+              );
+            }
+          })
+          .catch((e) => setNotice(`Backup failed: ${e}`))
+          .finally(() => setBusy(false));
+        break;
+      case "restore":
+        openDialog({
+          multiple: false,
+          filters: [{ name: "BibleLive backup", extensions: ["json"] }],
+        })
+          .then((path) => {
+            if (typeof path === "string") setConfirmRestore(path);
+          })
+          .catch(console.error);
+        break;
       case "shortcuts":
         setDialog("shortcuts");
         break;
@@ -111,6 +145,47 @@ export default function App() {
 
       {dialog === "settings" && <SettingsDialog onClose={() => setDialog(null)} />}
       {dialog === "shortcuts" && <ShortcutsDialog onClose={() => setDialog(null)} />}
+
+      {confirmRestore && (
+        <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && setConfirmRestore(null)}>
+          <div className="modal">
+            <h2>Restore from backup?</h2>
+            <p>
+              This <b>replaces everything</b> currently in the app — library,
+              slides, templates, settings and service history — with the
+              contents of:
+            </p>
+            <p className="muted" style={{ wordBreak: "break-all" }}>{confirmRestore}</p>
+            <div className="form-actions">
+              <button
+                className="primary"
+                disabled={busy}
+                onClick={() =>
+                  invoke("restore_data", { path: confirmRestore })
+                    .then(() => {
+                      setConfirmRestore(null);
+                      window.location.reload(); // reload every page's data
+                    })
+                    .catch((e) => {
+                      setConfirmRestore(null);
+                      setNotice(`Restore failed: ${e}`);
+                    })
+                }
+              >
+                {busy ? "Restoring…" : "Replace everything"}
+              </button>
+              <button onClick={() => setConfirmRestore(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {notice && (
+        <div className="notice-bar" role="status">
+          <span>{notice}</span>
+          <button onClick={() => setNotice(null)}>✕</button>
+        </div>
+      )}
     </div>
   );
 }

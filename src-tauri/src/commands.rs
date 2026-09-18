@@ -59,6 +59,41 @@ pub fn open_data_folder() -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Write a full snapshot of content + settings + service history to a
+/// JSON file (File → Backup data…).
+#[tauri::command]
+pub async fn backup_data(
+    store: State<'_, ContentStore>,
+    path: String,
+) -> Result<u64, String> {
+    let s = store.inner().clone();
+    let json = tauri::async_runtime::spawn_blocking(move || {
+        s.export_all().map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    let text = serde_json::to_string(&json).map_err(|e| e.to_string())?;
+    std::fs::write(&path, text).map_err(|e| e.to_string())?;
+    Ok(std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0))
+}
+
+/// Replace all content, settings and service history from a backup file.
+/// Refuses anything that is not a BibleLive backup BEFORE wiping.
+#[tauri::command]
+pub async fn restore_data(
+    store: State<'_, ContentStore>,
+    path: String,
+) -> Result<(), String> {
+    let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let data: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let s = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        s.import_all(&data).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 // ---- Library --------------------------------------------------------------
 
 #[tauri::command]

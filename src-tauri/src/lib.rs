@@ -241,6 +241,8 @@ pub fn run() {
             commands::greet,
             commands::app_status,
             commands::open_data_folder,
+            commands::backup_data,
+            commands::restore_data,
             commands::library_stats,
             commands::list_content,
             commands::get_content,

@@ -182,6 +182,88 @@ impl ContentStore {
         Ok(())
     }
 
+    // ---- Backup / restore ---------------------------------------------------
+
+    /// Tables making up a complete backup, in dependency order
+    /// (content first, sessions last).
+    const BACKUP_TABLES: [&str; 6] = [
+        "content_items",
+        "search_index",
+        "search_fts",
+        "settings",
+        "service_sessions",
+        "session_items",
+    ];
+
+    /// Full snapshot of every content/settings/session table as JSON.
+    pub fn export_all(&self) -> Result<serde_json::Value, ContentError> {
+        let conn = self.conn.lock();
+        let mut out = serde_json::json!({ "format": "biblelive-backup", "version": 1 });
+        for table in Self::BACKUP_TABLES {
+            let mut stmt = conn.prepare(&format!("SELECT * FROM {table}"))?;
+            let cols: Vec<String> = stmt.column_names().iter().map(|c| c.to_string()).collect();
+            let mut rows = Vec::new();
+            let mut r = stmt.query([])?;
+            while let Some(row) = r.next()? {
+                let mut obj = serde_json::Map::new();
+                for (i, col) in cols.iter().enumerate() {
+                    let v = match row.get_ref(i)? {
+                        rusqlite::types::ValueRef::Null => serde_json::Value::Null,
+                        rusqlite::types::ValueRef::Integer(x) => x.into(),
+                        rusqlite::types::ValueRef::Real(x) => x.into(),
+                        rusqlite::types::ValueRef::Text(t) => String::from_utf8_lossy(t).into(),
+                        rusqlite::types::ValueRef::Blob(b) => String::from_utf8_lossy(b).into(),
+                    };
+                    obj.insert(col.clone(), v);
+                }
+                rows.push(serde_json::Value::Object(obj));
+            }
+            out[table] = rows.into();
+        }
+        Ok(out)
+    }
+
+    /// Replace all content/settings/sessions with a backup snapshot.
+    /// Validates the file shape BEFORE wiping anything.
+    pub fn import_all(&self, data: &serde_json::Value) -> Result<(), ContentError> {
+        if data.get("format").and_then(|v| v.as_str()) != Some("biblelive-backup") {
+            return Err(ContentError::Other("not a BibleLive backup file".into()));
+        }
+        for table in Self::BACKUP_TABLES {
+            if data.get(table).and_then(|v| v.as_array()).is_none() {
+                return Err(ContentError::Other(format!(
+                    "backup is missing the '{table}' section"
+                )));
+            }
+        }
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction()?;
+        for table in Self::BACKUP_TABLES.iter().rev() {
+            tx.execute(&format!("DELETE FROM {table}"), [])?;
+        }
+        for table in Self::BACKUP_TABLES {
+            for row in data[table].as_array().unwrap() {
+                let Some(obj) = row.as_object() else { continue };
+                let cols: Vec<&str> = obj.keys().map(|s| s.as_str()).collect();
+                if cols.is_empty() {
+                    continue;
+                }
+                let placeholders: Vec<String> = (1..=cols.len()).map(|i| format!("?{i}")).collect();
+                let sql = format!(
+                    "INSERT INTO {table} ({}) VALUES ({})",
+                    cols.join(", "),
+                    placeholders.join(", ")
+                );
+                let vals: Vec<rusqlite::types::Value> = obj.values().map(json_to_sql).collect();
+                let params: Vec<&dyn rusqlite::ToSql> =
+                    vals.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+                tx.execute(&sql, params.as_slice())?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     // ---- CRUD ------------------------------------------------------------
 
     pub fn insert_item(&self, item: &ContentItem) -> Result<(), ContentError> {
@@ -625,6 +707,24 @@ pub fn data_dir() -> PathBuf {
     default_data_dir().unwrap_or_else(|_| dirs_fallback())
 }
 
+/// JSON value → SQLite parameter for backup restore (backups only ever
+/// contain the text/integral values SQLite produced).
+fn json_to_sql(v: &serde_json::Value) -> rusqlite::types::Value {
+    match v {
+        serde_json::Value::Null => rusqlite::types::Value::Null,
+        serde_json::Value::Bool(b) => rusqlite::types::Value::Integer(*b as i64),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                rusqlite::types::Value::Integer(i)
+            } else {
+                rusqlite::types::Value::Real(n.as_f64().unwrap_or(0.0))
+            }
+        }
+        serde_json::Value::String(s) => rusqlite::types::Value::Text(s.clone()),
+        other => rusqlite::types::Value::Text(other.to_string()),
+    }
+}
+
 fn dirs_fallback() -> PathBuf {
     if let Ok(appdata) = std::env::var("APPDATA") {
         return PathBuf::from(appdata).join("BibleLive");
@@ -841,5 +941,50 @@ mod tests {
             hits.iter().any(|h| h.item_id == "test-docx-1"),
             "expected docx content searchable"
         );
+    }
+
+    /// Backup/restore: a full snapshot round-trips content, settings and
+    /// sessions into a fresh store; a bad file is rejected BEFORE wiping.
+    #[test]
+    fn backup_restore_roundtrip() {
+        let source = test_store("backup-src");
+        let item = import::import_text(
+            "backup-song-1".into(),
+            "Backup Song".into(),
+            model::ItemType::Song,
+            "[Verse 1]\ngrace that keeps on giving",
+            "en",
+            "public-domain",
+        )
+        .unwrap();
+        source.insert_item(&item).unwrap();
+        source.set_setting("display_style_1", r#"{"fontFamily":"x"}"#).unwrap();
+        source.insert_session("sess-1", "Sunday").unwrap();
+
+        let snap = source.export_all().unwrap();
+        assert_eq!(snap["format"], "biblelive-backup");
+        assert!(snap["content_items"].as_array().unwrap().len() > 140);
+        assert!(!snap["settings"].as_array().unwrap().is_empty());
+
+        let target = test_store("backup-dst");
+        // Store a marker that must disappear on restore.
+        target
+            .set_setting("restore-should-delete-me", "yes")
+            .unwrap();
+        target.import_all(&snap).unwrap();
+
+        assert!(target.get_item("backup-song-1").unwrap().is_some());
+        assert_eq!(
+            target.get_setting("display_style_1").unwrap().as_deref(),
+            Some(r#"{"fontFamily":"x"}"#)
+        );
+        assert!(target.get_setting("restore-should-delete-me").unwrap().is_none());
+        let hits = target.search("grace that keeps on giving", 5).unwrap();
+        assert!(hits.iter().any(|h| h.item_id == "backup-song-1"));
+
+        // Foreign garbage is refused without touching the target.
+        let before = target.get_item("backup-song-1").unwrap().is_some();
+        assert!(target.import_all(&serde_json::json!({"nope": true})).is_err());
+        assert_eq!(target.get_item("backup-song-1").unwrap().is_some(), before);
     }
 }
