@@ -205,6 +205,21 @@ function SlotCard({
         </select>
       </label>
 
+      <label
+        className="slot-row"
+        title="Show the same scripture in a second Bible version, side by side"
+      >
+        ⧉ Second version
+        <select
+          value={view.pairVersion ?? ""}
+          onChange={(e) => act(() => displayApi.setPair(view.slot, e.currentTarget.value || null))}
+        >
+          <option value="">Off</option>
+          <option value="kjv">KJV</option>
+          <option value="asv">ASV</option>
+        </select>
+      </label>
+
       <div className="mode-row">
         {(["auto", "manual", "lock"] as const).map((m) => (
           <button
@@ -263,6 +278,29 @@ function SlotCard({
           <span className="muted">🖼 {c.title}</span>
         ) : c.kind === "video" && c.videoPath ? (
           <span className="muted">🎬 {c.title}</span>
+        ) : c.pair ? (
+          <div
+            className="preview-inner preview-pair"
+            style={{
+              fontFamily: style.fontFamily,
+              color: style.textColor,
+              fontSize: px(style.fontSize * 0.8),
+              textAlign: "left",
+              textShadow: (style.textShadow ?? true) ? "0 1px 4px rgba(0,0,0,0.8)" : "none",
+            }}
+          >
+            <div className="preview-col">
+              <div>{c.lines[0] ?? ""}</div>
+              <div className="preview-pair-tag">{c.version ?? ""}</div>
+            </div>
+            <div className="preview-col">
+              <div>{c.pair.lines[0] ?? ""}</div>
+              <div className="preview-pair-tag">{c.pair.version}</div>
+            </div>
+            <div className="preview-label" style={{ fontSize: px(style.fontSize * 0.5) }}>
+              {c.label}
+            </div>
+          </div>
         ) : (
           <div
             className="preview-inner"

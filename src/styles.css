@@ -739,6 +739,45 @@ textarea:focus {
   text-align: center;
   padding: 5vw;
 }
+
+/* Two-version display: primary and paired translation side by side. */
+.output-pair {
+  max-width: 94vw;
+  width: 100%;
+}
+.output-pair-row {
+  display: flex;
+  gap: 4vw;
+  align-items: stretch;
+}
+.output-pair-col {
+  flex: 1;
+  min-width: 0;
+}
+.output-pair-tag {
+  margin-top: 2.5vh;
+  font-size: 0.55em;
+  opacity: 0.75;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+}
+.preview-pair {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.preview-col {
+  flex: 1;
+  min-width: 45%;
+}
+.preview-pair-tag {
+  opacity: 0.7;
+  letter-spacing: 0.15em;
+  font-size: 0.7em;
+  text-transform: uppercase;
+  margin-top: 4px;
+}
 .output-lyric-lines {
   color: #ffffff;
   font-size: 4.6vw;

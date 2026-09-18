@@ -21,6 +21,7 @@ export default function OutputWindow({ slot }: { slot: number }) {
   const toastTimer = useRef<number | undefined>(undefined);
   const scriptureRef = useRef<HTMLDivElement>(null);
   const lyricsRef = useRef<HTMLDivElement>(null);
+  const pairRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let un: (() => void) | undefined;
@@ -52,21 +53,31 @@ export default function OutputWindow({ slot }: { slot: number }) {
   }, []);
 
   // Auto-fit: start at the configured size, shrink until the text fits.
+  // With a paired second column, both shrink together to one shared size.
   useEffect(() => {
     const kind = view?.kind;
     if (kind !== "scripture" && kind !== "lyrics") return;
     const style = view?.style;
     const baseVw = kind === "lyrics" ? (style?.fontSize ?? 6.5) * 0.72 : style?.fontSize ?? 6.5;
-    const el = kind === "lyrics" ? lyricsRef.current : scriptureRef.current;
-    if (!el) return;
+    const els = [kind === "lyrics" ? lyricsRef.current : scriptureRef.current, pairRef.current].filter(
+      (el): el is HTMLDivElement => !!el,
+    );
+    if (els.length === 0) return;
     let size = (baseVw / 100) * viewport.w;
-    el.style.fontSize = `${size}px`;
+    for (const el of els) el.style.fontSize = `${size}px`;
     // Two passes: fonts settle after first layout.
     requestAnimationFrame(() => {
       let guard = 0;
-      while (guard < 60 && (el.scrollHeight > window.innerHeight * 0.86 || el.scrollWidth > window.innerWidth * 0.96)) {
+      while (
+        guard < 60 &&
+        els.some(
+          (el) =>
+            el.scrollHeight > window.innerHeight * 0.86 ||
+            el.scrollWidth > window.innerWidth * 0.96,
+        )
+      ) {
         size *= 0.94;
-        el.style.fontSize = `${size}px`;
+        for (const el of els) el.style.fontSize = `${size}px`;
         guard++;
       }
     });
@@ -139,7 +150,55 @@ export default function OutputWindow({ slot }: { slot: number }) {
         />
       )}
 
-      {!blank && view.kind === "scripture" && (
+      {!blank && view.kind === "scripture" && view.pair && (
+        <div
+          className="output-scripture output-pair"
+          style={{ textAlign: alignLeft ? "left" : "center", paddingLeft: alignLeft ? "5vw" : undefined }}
+        >
+          <div className="output-pair-row">
+            <div className="output-pair-col">
+              <div
+                ref={scriptureRef}
+                className="output-text"
+                style={{ fontFamily: font, fontSize: `${size}vw`, color: textColor, textShadow: shadowCss }}
+              >
+                {view.lines.map((l, i) => (
+                  <span key={i}>
+                    {l}{" "}
+                  </span>
+                ))}
+              </div>
+              <div className="output-pair-tag" style={{ color: textColor }}>
+                {view.version ?? ""}
+              </div>
+            </div>
+            <div className="output-pair-col">
+              <div
+                ref={pairRef}
+                className="output-text"
+                style={{ fontFamily: font, fontSize: `${size}vw`, color: textColor, textShadow: shadowCss }}
+              >
+                {view.pair.lines.map((l, i) => (
+                  <span key={i}>
+                    {l}{" "}
+                  </span>
+                ))}
+              </div>
+              <div className="output-pair-tag" style={{ color: textColor }}>
+                {view.pair.version}
+              </div>
+            </div>
+          </div>
+          <div
+            className="output-label"
+            style={{ fontFamily: font, fontSize: `${size * 0.5}vw`, color: textColor, textShadow: shadowCss }}
+          >
+            {view.label}
+          </div>
+        </div>
+      )}
+
+      {!blank && view.kind === "scripture" && !view.pair && (
         <div
           className="output-scripture"
           style={{ textAlign: alignLeft ? "left" : "center", paddingLeft: alignLeft ? "7vw" : undefined }}

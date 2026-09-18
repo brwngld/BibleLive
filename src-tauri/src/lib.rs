@@ -126,11 +126,13 @@ pub fn run() {
             use tauri::Manager;
             use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
-            // Per-slot display styles persisted in the settings table.
+            // Per-slot display styles + two-version pair settings persisted
+            // in the settings table.
             {
                 let store = app.state::<crate::content::ContentStore>();
-                app.state::<crate::display::DisplayManager>()
-                    .load_styles(&store);
+                let mgr = app.state::<crate::display::DisplayManager>();
+                mgr.load_styles(&store);
+                mgr.load_pair_versions(&store);
             }
 
             // Whisper models carried inside the installer: resolve them from
@@ -274,6 +276,7 @@ pub fn run() {
             commands::open_slot_output,
             commands::close_slot_output,
             commands::set_slot_scripture,
+            commands::set_slot_pair,
             commands::set_slot_section,
             commands::set_slot_media,
             commands::slot_step,

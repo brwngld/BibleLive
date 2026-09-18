@@ -136,6 +136,25 @@ impl SectionedContent {
     pub fn with_index(item_id: String, kind: RenderKind, title: String, sections: Vec<LabeledSection>, index: usize) -> Self {
         Self { item_id, kind, title, sections, index }
     }
+
+    pub fn current_key(&self) -> Option<&str> {
+        self.sections
+            .get(self.index.min(self.sections.len().saturating_sub(1)))
+            .map(|s| s.key.as_str())
+    }
+
+    /// Jump to the section with this key (verse keys are identical across
+    /// translations, so this keeps a paired version in lockstep). Returns
+    /// false when the key is absent — index is left where it was.
+    pub fn seek_key(&mut self, key: &str) -> bool {
+        match self.sections.iter().position(|s| s.key == key) {
+            Some(i) => {
+                self.index = i;
+                true
+            }
+            None => false,
+        }
+    }
 }
 
 enum SlotContent {
@@ -145,6 +164,15 @@ enum SlotContent {
         image_path: Option<String>,
         video_path: Option<String>,
     },
+}
+
+/// The second Bible column of a paired two-version display.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PairEvent {
+    pub version: String,
+    pub label: String,
+    pub lines: Vec<String>,
 }
 
 /// Payload emitted to output windows and the operator UI.
@@ -161,6 +189,12 @@ pub struct SlotContentEvent {
     pub video_path: Option<String>,
     pub blank: bool,
     pub style: SlotStyle,
+    /// Translation tag of the primary scripture ("KJV"), set when paired.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Second column: same verse in the paired translation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pair: Option<PairEvent>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -173,6 +207,8 @@ pub struct SlotView {
     pub window_open: bool,
     pub degraded: bool,
     pub active: bool,
+    /// Configured second Bible version for this slot: None | "kjv" | "asv".
+    pub pair_version: Option<String>,
     pub content: SlotContentEvent,
 }
 
@@ -183,6 +219,10 @@ struct SlotState {
     degraded: bool,
     style: SlotStyle,
     content: Option<SlotContent>,
+    /// Same scripture in the paired translation, stepped in lockstep.
+    pair: Option<SectionedContent>,
+    /// The configured pairing for this slot ("kjv"/"asv"), persisted.
+    pair_version: Option<String>,
 }
 
 impl Default for SlotState {
@@ -194,6 +234,8 @@ impl Default for SlotState {
             degraded: false,
             style: SlotStyle::default(),
             content: None,
+            pair: None,
+            pair_version: None,
         }
     }
 }
@@ -227,7 +269,22 @@ fn empty_event(slot: u8) -> SlotContentEvent {
         video_path: None,
         blank: true,
         style: SlotStyle::default(),
+        version: None,
+        pair: None,
     }
+}
+
+/// "John (KJV)" → "KJV" — the translation tag shown over a paired column.
+/// Only bible titles carry a parenthetical, and only scripture is paired.
+fn version_tag(title: &str) -> Option<String> {
+    let t = title.trim();
+    t.ends_with(')')
+        .then(|| {
+            t.rfind('(')
+                .map(|i| t[i + 1..t.len() - 1].trim().to_string())
+        })
+        .flatten()
+        .filter(|s| !s.is_empty())
 }
 
 fn content_event(slot: u8, state: &SlotState) -> SlotContentEvent {
@@ -248,10 +305,12 @@ fn content_event(slot: u8, state: &SlotState) -> SlotContentEvent {
             video_path: video_path.clone(),
             blank: false,
             style: state.style.clone(),
+            version: None,
+            pair: None,
         },
         Some(SlotContent::Sections(c)) => {
             let sec = &c.sections[c.index.min(c.sections.len() - 1)];
-            SlotContentEvent {
+            let mut ev = SlotContentEvent {
                 slot,
                 kind: format!("{:?}", c.kind).to_lowercase(),
                 title: c.title.clone(),
@@ -262,12 +321,27 @@ fn content_event(slot: u8, state: &SlotState) -> SlotContentEvent {
                 video_path: None,
                 blank: false,
                 style: state.style.clone(),
+                version: None,
+                pair: None,
+            };
+            if c.kind == RenderKind::Scripture {
+                if let Some(pair) = &state.pair {
+                    let psec = &pair.sections[pair.index.min(pair.sections.len() - 1)];
+                    ev.pair = Some(PairEvent {
+                        version: version_tag(&pair.title).unwrap_or_default(),
+                        label: psec.label.clone(),
+                        lines: psec.lines.clone(),
+                    });
+                    ev.version = version_tag(&c.title);
+                }
             }
+            ev
         }
     };
     if state.blank {
         ev.kind = "blank".into();
         ev.blank = true;
+        ev.pair = None;
     }
     ev
 }
@@ -338,6 +412,7 @@ impl DisplayManager {
                 window_open: false, // filled in by the command layer (needs AppHandle)
                 degraded: s.degraded,
                 active: (i + 1) as u8 == active,
+                pair_version: s.pair_version.clone(),
                 content: content_event((i + 1) as u8, s),
             })
             .collect()
@@ -362,7 +437,86 @@ impl DisplayManager {
         let mut slots = self.slots.lock();
         let st = &mut slots[(slot as usize).clamp(1, SLOT_COUNT) - 1];
         st.content = Some(SlotContent::Sections(content));
+        st.pair = None; // stale pairing — the projection path re-attaches
         st.blank = false;
+    }
+
+    // ---- Two-version pairing ----------------------------------------------
+
+    /// The configured second translation for this slot: None | "kjv" | "asv".
+    pub fn pair_version_of(&self, slot: u8) -> Option<String> {
+        self.slots.lock()[(slot as usize).clamp(1, SLOT_COUNT) - 1]
+            .pair_version
+            .clone()
+    }
+
+    pub fn set_pair_version(&self, slot: u8, version: Option<String>) {
+        let v = version.filter(|v| v == "kjv" || v == "asv");
+        self.slots.lock()[(slot as usize).clamp(1, SLOT_COUNT) - 1].pair_version = v;
+    }
+
+    /// Load persisted pair settings at startup (missing keys keep Off).
+    pub fn load_pair_versions(&self, store: &ContentStore) {
+        for slot in 1..=SLOT_COUNT as u8 {
+            if let Ok(Some(raw)) = store.get_setting(&format!("display_pair_{slot}")) {
+                self.set_pair_version(slot, Some(raw));
+            }
+        }
+    }
+
+    /// Attach the companion scripture and line it up with the primary's
+    /// current verse. None removes the second column.
+    pub fn set_pair(&self, slot: u8, pair: Option<SectionedContent>) {
+        let mut slots = self.slots.lock();
+        let st = &mut slots[(slot as usize).clamp(1, SLOT_COUNT) - 1];
+        st.pair = pair;
+        Self::sync_pair_locked(st);
+    }
+
+    fn sync_pair_locked(st: &mut SlotState) {
+        let Some(SlotContent::Sections(primary)) = &st.content else {
+            return;
+        };
+        let Some(key) = primary.current_key().map(str::to_string) else {
+            return;
+        };
+        if let Some(pair) = &mut st.pair {
+            pair.seek_key(&key);
+        }
+    }
+
+    /// Item id + current verse key of the scripture on a slot — used to
+    /// re-resolve a pairing when the operator toggles it mid-show.
+    pub fn current_scripture(&self, slot: u8) -> Option<(String, String)> {
+        let slots = self.slots.lock();
+        match &slots[(slot as usize).clamp(1, SLOT_COUNT) - 1].content {
+            Some(SlotContent::Sections(c)) if c.kind == RenderKind::Scripture => {
+                c.current_key().map(|k| (c.item_id.clone(), k.to_string()))
+            }
+            _ => None,
+        }
+    }
+
+    /// Snapshot the paired column so an automatic show can restore it.
+    pub fn pair_snapshot(&self, slot: u8) -> Option<SectionedContent> {
+        self.slots.lock()[(slot as usize).clamp(1, SLOT_COUNT) - 1]
+            .pair
+            .clone()
+    }
+
+    /// Restore a full slot (primary + pair) — the undo path.
+    pub fn restore_sections(
+        &self,
+        slot: u8,
+        primary: SectionedContent,
+        pair: Option<SectionedContent>,
+    ) {
+        let mut slots = self.slots.lock();
+        let st = &mut slots[(slot as usize).clamp(1, SLOT_COUNT) - 1];
+        st.content = Some(SlotContent::Sections(primary));
+        st.pair = pair;
+        st.blank = false;
+        Self::sync_pair_locked(st);
     }
 
     /// First slot set to AUTO (1-based), if any — the default target
@@ -411,6 +565,7 @@ impl DisplayManager {
             image_path,
             video_path,
         });
+        st.pair = None; // media replaces scripture; pairing re-attaches later
         st.blank = false;
     }
 
@@ -419,7 +574,8 @@ impl DisplayManager {
         slots[(slot as usize).clamp(1, SLOT_COUNT) - 1].degraded = degraded;
     }
 
-    /// Advance within the sectioned content. Returns true if moved.
+    /// Advance within the sectioned content. The paired version (if any)
+    /// follows verse-for-verse. Returns true if moved.
     pub fn step(&self, slot: u8, delta: i32) -> bool {
         let mut slots = self.slots.lock();
         let st = &mut slots[(slot as usize).clamp(1, SLOT_COUNT) - 1];
@@ -438,6 +594,10 @@ impl DisplayManager {
             return false;
         }
         c.index = next as usize;
+        let key = c.current_key().map(str::to_string);
+        if let (Some(key), Some(pair)) = (key, &mut st.pair) {
+            pair.seek_key(&key); // absent key: pair stays on its verse
+        }
         true
     }
 
@@ -584,6 +744,111 @@ mod tests {
         assert_eq!(round.text_shadow, s.text_shadow);
     }
 
+    fn sec(key: &str, label: &str, text: &str) -> LabeledSection {
+        LabeledSection { key: key.into(), label: label.into(), lines: vec![text.into()] }
+    }
+
+    fn scripture(id: &str, title: &str, keys: &[&str], index: usize) -> SectionedContent {
+        SectionedContent::with_index(
+            id.into(),
+            RenderKind::Scripture,
+            title.into(),
+            keys.iter()
+                .enumerate()
+                .map(|(i, k)| sec(k, &format!("John 3:{}", 16 + i), &format!("verse {k}")))
+                .collect(),
+            index,
+        )
+    }
+
+    /// Two-version display: the companion follows verse-for-verse while
+    /// stepping, and holds its verse when its translation lacks a key.
+    #[test]
+    fn pair_display_and_lockstep() {
+        let mgr = DisplayManager::new();
+        let keys = ["john.3.16", "john.3.17", "john.3.18"];
+        mgr.set_sections(1, scripture("bible-kjv-john", "John (KJV)", &keys, 0));
+        mgr.set_pair(
+            1,
+            Some(scripture("bible-asv-john", "John (ASV)", &keys, 0)),
+        );
+
+        let ev = content_event(1, &mgr.slots.lock()[0]);
+        assert_eq!(ev.version.as_deref(), Some("KJV"));
+        let p = ev.pair.as_ref().expect("pair column on the event");
+        assert_eq!(p.version, "ASV");
+        assert_eq!(p.label, "John 3:16");
+
+        mgr.step(1, 2);
+        let ev = content_event(1, &mgr.slots.lock()[0]);
+        assert_eq!(ev.label, "John 3:18");
+        assert_eq!(
+            ev.pair.as_ref().unwrap().label,
+            "John 3:18",
+            "pair steps in lockstep"
+        );
+
+        // Gappy companion: verse 3:17 missing — pair holds its verse.
+        let gappy = ["john.3.16", "john.3.18"];
+        mgr.step(1, -2); // back to 3:16, pair re-syncs
+        mgr.set_pair(1, Some(scripture("bible-asv-john", "John (ASV)", &gappy, 0)));
+        mgr.step(1, 1); // primary → 3:17, pair has no 3:17
+        let ev = content_event(1, &mgr.slots.lock()[0]);
+        assert_eq!(ev.label, "John 3:17");
+        assert_eq!(ev.pair.as_ref().unwrap().label, "John 3:16", "missing key holds position");
+
+        // Restore path re-syncs both columns.
+        mgr.restore_sections(
+            1,
+            scripture("bible-kjv-john", "John (KJV)", &keys, 1),
+            Some(scripture("bible-asv-john", "John (ASV)", &keys, 2)),
+        );
+        let ev = content_event(1, &mgr.slots.lock()[0]);
+        assert_eq!(ev.label, "John 3:17");
+        assert_eq!(ev.pair.as_ref().unwrap().label, "John 3:17", "restore syncs the pair");
+    }
+
+    /// Pairing only applies to scripture; blanks and lyrics never show a
+    /// second column, and unknown translations are rejected at the gate.
+    #[test]
+    fn pair_setting_guards() {
+        let mgr = DisplayManager::new();
+        mgr.set_pair_version(2, Some("niv".into()));
+        assert_eq!(mgr.pair_version_of(2), None, "unknown translation rejected");
+        mgr.set_pair_version(2, Some("asv".into()));
+        assert_eq!(mgr.pair_version_of(2).as_deref(), Some("asv"));
+
+        let keys = ["john.3.16"];
+        mgr.set_sections(2, scripture("bible-kjv-john", "John (KJV)", &keys, 0));
+        mgr.set_pair(2, Some(scripture("bible-asv-john", "John (ASV)", &keys, 0)));
+        mgr.set_blank(2, true);
+        let ev = content_event(2, &mgr.slots.lock()[1]);
+        assert!(ev.pair.is_none(), "blank hides the second column");
+        assert!(ev.blank);
+
+        mgr.set_blank(2, false);
+        let ev = content_event(2, &mgr.slots.lock()[1]);
+        assert!(ev.pair.is_some(), "unblank brings the column back");
+
+        let song = SectionedContent::new(
+            "hymn-x".into(),
+            RenderKind::Lyrics,
+            "Amazing Grace".into(),
+            vec![sec("v1", "1", "line")],
+        );
+        mgr.set_sections(2, song);
+        let ev = content_event(2, &mgr.slots.lock()[1]);
+        assert!(ev.pair.is_none(), "lyrics never pair");
+    }
+
+    #[test]
+    fn version_tag_parsing() {
+        assert_eq!(version_tag("John (KJV)").as_deref(), Some("KJV"));
+        assert_eq!(version_tag("1 Corinthians (ASV)").as_deref(), Some("ASV"));
+        assert_eq!(version_tag("Amazing Grace"), None);
+        assert_eq!(version_tag("Weird ("), None);
+    }
+
     fn test_store(tag: &str) -> ContentStore {
         let dir = std::env::temp_dir().join(format!(
             "biblelive-disp-{}-{}",
@@ -684,6 +949,7 @@ pub fn emit_slot(app: &AppHandle, slot: u8, mgr: &DisplayManager) {
                 .is_some(),
             degraded: s.degraded,
             active: slot == mgr.active_display(),
+            pair_version: s.pair_version.clone(),
             content: content_event(slot, s),
         }
     };

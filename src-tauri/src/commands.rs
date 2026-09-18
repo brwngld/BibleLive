@@ -560,23 +560,21 @@ pub struct ScriptureInput {
 /// Shared scripture projection: loads the WHOLE chapter of the first
 /// requested key (so Next/Prev walks the chapter), index at the picked
 /// verse. Used by the manual command and by Automatic-mode auto-show.
-async fn scripture_to_slot(
-    app: &tauri::AppHandle,
-    mgr: &DisplayManager,
+/// Load a bible book's sections for the given keys: the WHOLE chapter of
+/// the first key that resolves (so Next/Prev walks the chapter), else the
+/// exact keys. Returns (title, sections, index).
+async fn load_scripture_sections(
     store: &ContentStore,
-    service: &ServiceState,
-    slot: u8,
-    item_id: String,
-    keys: Vec<String>,
-) -> Result<(), String> {
+    item_id: &str,
+    keys: &[String],
+) -> Result<(String, Vec<LabeledSection>, usize), String> {
     let s = store.clone();
-    let item_id_inner = item_id.clone();
-    let keys_inner = keys.clone();
-    let (title, sections, index) = tauri::async_runtime::spawn_blocking(move || {
-        // Chapter mode first: whole chapter, index at the requested verse.
+    let item_id = item_id.to_string();
+    let keys = keys.to_vec();
+    tauri::async_runtime::spawn_blocking(move || {
         let mut loaded: Option<(usize, Vec<LabeledSection>)> = None;
-        for k in &keys_inner {
-            if let Some(found) = s.get_chapter_sections(&item_id_inner, k)? {
+        for k in &keys {
+            if let Some(found) = s.get_chapter_sections(&item_id, k)? {
                 loaded = Some(found);
                 break;
             }
@@ -584,7 +582,7 @@ async fn scripture_to_slot(
         let (index, sections) = match loaded {
             Some(x) => x,
             None => {
-                let v = s.get_sections_by_keys(&item_id_inner, &keys_inner)?;
+                let v = s.get_sections_by_keys(&item_id, &keys)?;
                 if v.is_empty() {
                     return Err(crate::content::ContentError::Other(
                         "no verses matched those keys".into(),
@@ -594,14 +592,75 @@ async fn scripture_to_slot(
             }
         };
         let title = s
-            .get_item(&item_id_inner)?
+            .get_item(&item_id)?
             .map(|i| i.title)
             .unwrap_or_else(|| "Scripture".into());
         Ok((title, sections, index))
     })
     .await
     .map_err(|e| e.to_string())?
-    .map_err(|e: crate::content::ContentError| e.to_string())?;
+    .map_err(|e: crate::content::ContentError| e.to_string())
+}
+
+/// The same book in the other translation: "bible-kjv-1-corinthians" +
+/// "asv" → "bible-asv-1-corinthians". The same translation, or a
+/// non-Bible item, does not pair.
+fn companion_bible_id(item_id: &str, version: &str) -> Option<String> {
+    for from in ["kjv", "asv"] {
+        if let Some(book) = item_id.strip_prefix(&format!("bible-{from}-")) {
+            return if from == version {
+                None
+            } else {
+                Some(format!("bible-{version}-{book}"))
+            };
+        }
+    }
+    None
+}
+
+/// Resolve and attach the companion scripture for a slot's pairing, from
+/// the primary's item id and the keys it was projected with (verse keys
+/// are identical across translations, so the companion lines up
+/// verse-for-verse). No-op when the slot isn't paired or the translation
+/// lacks the book — the display silently stays single-column.
+async fn attach_pair(
+    store: &ContentStore,
+    mgr: &DisplayManager,
+    slot: u8,
+    primary_item_id: &str,
+    keys: &[String],
+) {
+    let Some(version) = mgr.pair_version_of(slot) else { return };
+    let Some(pair_id) = companion_bible_id(primary_item_id, &version) else { return };
+    let Ok((ptitle, psections, pindex)) = load_scripture_sections(store, &pair_id, keys).await
+    else {
+        return;
+    };
+    if psections.is_empty() {
+        return;
+    }
+    mgr.set_pair(
+        slot,
+        Some(SectionedContent::with_index(
+            pair_id,
+            RenderKind::Scripture,
+            ptitle,
+            psections,
+            pindex,
+        )),
+    );
+}
+
+async fn scripture_to_slot(
+    app: &tauri::AppHandle,
+    mgr: &DisplayManager,
+    store: &ContentStore,
+    service: &ServiceState,
+    slot: u8,
+    item_id: String,
+    keys: Vec<String>,
+) -> Result<(), String> {
+    let (title, sections, index) = load_scripture_sections(store, &item_id, &keys).await?;
 
     if sections.is_empty() {
         return Err("no verses matched those keys".into());
@@ -616,6 +675,7 @@ async fn scripture_to_slot(
         slot,
         SectionedContent::with_index(item_id.clone(), RenderKind::Scripture, title, sections, index),
     );
+    attach_pair(store, mgr, slot, &item_id, &keys).await;
     record_item(store, service, slot, "scripture", &rec_title, &label);
     display::emit_slot(app, slot, mgr);
     Ok(())
@@ -641,6 +701,48 @@ pub async fn set_slot_scripture(
         input.keys,
     )
     .await
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PairInput {
+    pub slot: u8,
+    pub version: Option<String>,
+}
+
+/// Turn two-version display on/off for a slot ("kjv" | "asv" | null).
+/// When scripture is already on the slot, the second column appears (or
+/// disappears) immediately at the current verse.
+#[tauri::command]
+pub async fn set_slot_pair(
+    app: tauri::AppHandle,
+    mgr: State<'_, DisplayManager>,
+    store: State<'_, ContentStore>,
+    input: PairInput,
+) -> Result<(), String> {
+    match input.version.as_deref() {
+        None | Some("kjv") | Some("asv") => {}
+        Some(other) => return Err(format!("unknown version: {other}")),
+    }
+    mgr.set_pair_version(input.slot, input.version.clone());
+    let store_c = store.inner().clone();
+    let key = format!("display_pair_{}", input.slot);
+    let val = input.version.clone().unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || {
+        store_c.set_setting(&key, &val).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    // Re-resolve against what's on the slot right now, so the operator
+    // sees the change without re-picking the verse.
+    let current = mgr.current_scripture(input.slot);
+    mgr.set_pair(input.slot, None);
+    if let Some((item_id, verse_key)) = current {
+        attach_pair(store.inner(), mgr.inner(), input.slot, &item_id, &[verse_key]).await;
+    }
+    display::emit_slot(&app, input.slot, mgr.inner());
+    Ok(())
 }
 
 #[derive(serde::Deserialize)]
@@ -1220,12 +1322,22 @@ struct SuggestionPayload {
     mode: String,
 }
 
+/// What a slot held before an automatic show — primary plus the paired
+/// second column, restored together on Undo.
+#[derive(Clone)]
+pub struct SlotSnapshot {
+    pub primary: SectionedContent,
+    pub pair: Option<SectionedContent>,
+}
+
 /// Snapshots for undoing Automatic-mode auto-shows: suggestion id →
-/// (taken-at, slot, previous content). Entries self-expire on access.
+/// (taken-at, slot, snapshot). Entries self-expire on access.
 /// Managed as an Arc so the listening pipeline and the undo command share
 /// one map.
 #[derive(Default)]
-pub struct AutoShowUndo(Mutex<std::collections::HashMap<String, (std::time::Instant, u8, SectionedContent)>>);
+pub struct AutoShowUndo(
+    Mutex<std::collections::HashMap<String, (std::time::Instant, u8, SlotSnapshot)>>,
+);
 
 /// Verified suggestions must clear this confidence to project themselves.
 const AUTO_SHOW_CONFIDENCE: f32 = 0.75;
@@ -1378,7 +1490,12 @@ pub async fn start_listening(
                                 finals.iter().find(|s| s.confidence >= AUTO_SHOW_CONFIDENCE)
                             {
                                 if let Some(slot) = disp.auto_target_slot(&auto_target) {
-                                    let snapshot = disp.content_snapshot(slot);
+                                    let snapshot = disp
+                                        .content_snapshot(slot)
+                                        .map(|primary| SlotSnapshot {
+                                            pair: disp.pair_snapshot(slot),
+                                            primary,
+                                        });
                                     let projected = scripture_to_slot(
                                         &app,
                                         &disp,
@@ -1480,7 +1597,7 @@ pub async fn undo_auto_show(
     let entry = undo.0.lock().remove(&id);
     if let Some((at, slot, snap)) = entry {
         if at.elapsed() <= AUTO_UNDO_HARD_LIMIT {
-            disp.set_sections(slot, snap);
+            disp.restore_sections(slot, snap.primary, snap.pair);
             display::emit_slot(&app, slot, &disp);
         }
     }
@@ -1781,4 +1898,26 @@ pub async fn model_status(stt: State<'_, SttHolder>) -> Result<ModelStatus, Stri
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::companion_bible_id;
+
+    /// Companion ids: cross-translation only, book slug preserved intact
+    /// (slugs may contain dashes, e.g. 1-corinthians).
+    #[test]
+    fn companion_bible_id_swaps_translation_only() {
+        assert_eq!(
+            companion_bible_id("bible-kjv-john", "asv").as_deref(),
+            Some("bible-asv-john")
+        );
+        assert_eq!(
+            companion_bible_id("bible-asv-1-corinthians", "kjv").as_deref(),
+            Some("bible-kjv-1-corinthians")
+        );
+        assert_eq!(companion_bible_id("bible-kjv-john", "kjv"), None);
+        assert_eq!(companion_bible_id("hymn-amazing-grace", "asv"), None);
+        assert_eq!(companion_bible_id("bible-niv-john", "asv"), None);
+    }
 }

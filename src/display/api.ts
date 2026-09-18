@@ -21,6 +21,10 @@ export type SlotContent = {
   videoPath: string | null;
   blank: boolean;
   style: SlotStyle;
+  /** Translation tag of the primary column ("KJV"), present when paired. */
+  version?: string;
+  /** Second column: the same verse in the paired translation. */
+  pair?: { version: string; label: string; lines: string[] };
 };
 
 export interface SlotStyle {
@@ -124,6 +128,8 @@ export interface SlotView {
   windowOpen: boolean;
   degraded: boolean;
   active: boolean;
+  /** Second Bible version shown beside scripture: null | "kjv" | "asv". */
+  pairVersion: string | null;
   content: SlotContent;
 }
 
@@ -143,6 +149,8 @@ export const displayApi = {
   closeOutput: (slot: number) => invoke("close_slot_output", { slot }),
   setScripture: (slot: number, itemId: string, keys: string[]) =>
     invoke("set_slot_scripture", { input: { slot, itemId, keys } }),
+  setPair: (slot: number, version: string | null) =>
+    invoke("set_slot_pair", { input: { slot, version } }),
   setSection: (slot: number, itemId: string, key: string) =>
     invoke("set_slot_section", { input: { slot, itemId, key } }),
   setMedia: (slot: number, input: { title?: string; imagePath?: string; videoPath?: string }) =>
