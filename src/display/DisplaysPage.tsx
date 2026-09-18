@@ -609,6 +609,7 @@ function ContentPickerDialog({
   const [browseBook, setBrowseBook] = useState<ContentItem | null>(null);
   const [browseChapter, setBrowseChapter] = useState(1);
   const [browseVerse, setBrowseVerse] = useState(1);
+  const [browseVerseTo, setBrowseVerseTo] = useState(1);
 
   useEffect(() => {
     if (kind === "lyrics") {
@@ -637,6 +638,7 @@ function ContentPickerDialog({
       setBrowseBook(b);
       setBrowseChapter(1);
       setBrowseVerse(1);
+      setBrowseVerseTo(1);
     }).catch(console.error);
   }, [browseBookId, kind]);
 
@@ -656,9 +658,14 @@ function ContentPickerDialog({
   async function showBrowseVerse() {
     if (!browseItem) return;
     try {
-      await displayApi.setScripture(slot, browseItem.key, [
-        `${browseItem.slug}.${browseChapter}.${browseVerse}`,
-      ]);
+      // Range: every verse key from the picked verse to the "to" verse
+      // (backend walks the chapter, starting at the first key).
+      const keys: string[] = [];
+      const end = Math.max(browseVerse, browseVerseTo);
+      for (let v = browseVerse; v <= end; v++) {
+        keys.push(`${browseItem.slug}.${browseChapter}.${v}`);
+      }
+      await displayApi.setScripture(slot, browseItem.key, keys);
       onPicked();
     } catch (e) {
       alert(String(e));
@@ -773,6 +780,7 @@ function ContentPickerDialog({
                   onChange={(e) => {
                     setBrowseChapter(Number(e.currentTarget.value));
                     setBrowseVerse(1);
+                    setBrowseVerseTo(1);
                   }}
                 >
                   {bookChapters.map((_, i) => (
@@ -786,7 +794,10 @@ function ContentPickerDialog({
                 Verse
                 <select
                   value={Math.min(browseVerse, (bookChapters[browseChapter - 1] ?? []).length)}
-                  onChange={(e) => setBrowseVerse(Number(e.currentTarget.value))}
+                  onChange={(e) => {
+                    setBrowseVerse(Number(e.currentTarget.value));
+                    setBrowseVerseTo(Number(e.currentTarget.value));
+                  }}
                 >
                   {(bookChapters[browseChapter - 1] ?? []).map((_, i) => (
                     <option key={i + 1} value={i + 1}>
@@ -795,11 +806,28 @@ function ContentPickerDialog({
                   ))}
                 </select>
               </label>
+              <label title="Pick a later verse to show a range on one screen">
+                To verse
+                <select
+                  value={Math.min(browseVerseTo, (bookChapters[browseChapter - 1] ?? []).length)}
+                  onChange={(e) => setBrowseVerseTo(Number(e.currentTarget.value))}
+                >
+                  {(bookChapters[browseChapter - 1] ?? [])
+                    .slice(browseVerse - 1)
+                    .map((_, i) => (
+                      <option key={browseVerse + i} value={browseVerse + i}>
+                        {browseVerse + i}
+                      </option>
+                    ))}
+                </select>
+              </label>
             </div>
             <div className="browse-preview muted">
               {browseBook
-                ? `${browseBook.metadata.book ?? ""} ${browseChapter}:${browseVerse} — ${
-                    (bookChapters[browseChapter - 1] ?? [])[browseVerse - 1] ?? ""
+                ? `${browseBook.metadata.book ?? ""} ${browseChapter}:${browseVerse}${
+                    browseVerseTo > browseVerse ? `-${browseVerseTo}` : ""
+                  } — ${(bookChapters[browseChapter - 1] ?? [])[browseVerse - 1] ?? ""}${
+                    browseVerseTo > browseVerse ? " …" : ""
                   }`
                 : "Loading…"}
             </div>
