@@ -79,13 +79,39 @@ are designed-in (schemas, command bus) but shipped later.
 - [x] Service history: browse past services, reopen their logs, delete
 - [x] Command bus groundwork proven (all control flows through commands —
       ready for the phone companion / remote controllers)
-- [ ] Service Session lifecycle (start/end, context tracking)
-- [ ] Live control room UI (audio status, current content, AI panel,
-      display strip, emergency controls)
-- [ ] Save/recall service sessions
-- [ ] Command bus finalized (remote-controller-ready)
+
+## M5.5 — Operator experience & presentation features ✅ (post-M5 increments)
+- [x] Stability: whisper mutex crash fixed; VAD rebuilt (raw-level gating,
+      adaptive noise floor, AGC after VAD); bounded partial transcription
+- [x] Progressive live matching from partial transcripts with
+      confidence/stability gating; sentence-boundary flush for continuous
+      reading (no-pause scripture still produces verified matches)
+- [x] Application menu bar (File/View/Settings/Tools/Help) + Settings
+      dialog; Ctrl+1..4 page switching; open data folder (support)
+- [x] Automatic mode: verified high-confidence matches project themselves
+      with a 10s Undo window; configurable target display (first AUTO slot
+      or pinned 1–5, LOCK always protected)
+- [x] Theme system: per-display background image, alignment, text shadow,
+      transition; presentation-type presets (Classic/Cathedral/Modern/
+      Lantern/Bulletin)
+- [x] Two-version scripture display (KJV + ASV side by side, lockstep
+      stepping, works with voice auto-show too)
+- [x] Custom slides: slide content type, editor, picker, projector render;
+      built-in starter sets (Welcome / Announcements / Sermon points);
+      line-by-line reveal on Next/Prev
+- [x] Output transitions (fade / slide) when projected content changes
+- [x] Saved theme templates: capture a display's whole look by name, apply
+      to any display in one click
 
 ## M6+ — Church Edition & beyond
+- [ ] **Designed theme templates** (requested): built-in, artist-designed
+      looks (background art + typography + layout) beyond the user-made
+      templates. Blocked on reference material — user will supply design
+      samples (screenshots of liked designs, background image packs, or
+      theme/.pptx files from other software); we then recreate them as
+      built-in presets.
+- [ ] Notification/lower-third alert overlays (ticker announcements)
+- [ ] Service queue view (planned order, drag to re-order, go-live)
 - [ ] Roles (Admin/Operator/Presenter/Viewer) + private content access control
 - [ ] **Phone companion app** (requested): connects to the desktop over the
       church LAN (no internet needed) for (a) remote control — suggestions
@@ -97,6 +123,7 @@ are designed-in (schemas, command bus) but shipped later.
 - [ ] Passage following (auto-advance verse by verse) — optional setting
 - [ ] Partial-quote matching
 - [ ] More import formats (OpenLyrics/OpenSong XML, PDF)
+- [ ] More Bible versions (e.g., WEB) + verse-range display in picker/suggestions
 - [ ] Backup / restore / export-import of the whole library
 - [ ] Cloud LLM option (paraphrase/story detection)
 - [ ] Cloud sync (Cloud Edition)
