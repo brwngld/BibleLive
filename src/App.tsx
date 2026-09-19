@@ -116,16 +116,20 @@ export default function App() {
   return (
     <div className="app">
       <nav className="top-nav">
-        <div className="brand">
-          <span className="brand-mark">B</span> BibleLive
+        <div className="nav-row nav-row-menus">
+          <div className="brand">
+            <span className="brand-mark">B</span> BibleLive
+          </div>
+          <MenuBar onAction={onMenuAction} />
         </div>
-        <MenuBar onAction={onMenuAction} />
-        <div className="nav-tabs">
-          {TABS.map((t) => (
-            <button key={t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>
-              {TAB_LABELS[t]}
-            </button>
-          ))}
+        <div className="nav-row nav-row-tabs">
+          <div className="nav-tabs">
+            {TABS.map((t) => (
+              <button key={t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>
+                {TAB_LABELS[t]}
+              </button>
+            ))}
+          </div>
         </div>
       </nav>
 
