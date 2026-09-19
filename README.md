@@ -48,9 +48,13 @@ estimates from parameter counts. The current build is CPU-only — GPU
 [whisper.cpp models repository on Hugging Face](https://huggingface.co/ggerganov/whisper.cpp/tree/main)
 (e.g. [`ggml-base.en.bin`](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin),
 [`ggml-small.en.bin`](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin)).
-To try one, place the file in `%APPDATA%\BibleLive\models\` — the in-app
-selector currently offers Base and Tiny; other sizes are listed here for
-hardware planning and can be wired in on request.
+The model files are **not stored in this git repository** (GitHub's 100 MB
+file limit) — they are gitignored. After a fresh clone, download `ggml-base.en.bin`
+and `ggml-tiny.en.bin` and put them in `src-tauri/resources/models/` so the
+installer bundles them. To try one without rebuilding, place the file in
+`%APPDATA%\BibleLive\models\` — the in-app selector currently offers Base and
+Tiny; other sizes are listed here for hardware planning and can be wired in on
+request.
 
 **Choosing for your hardware:** 2-core PC → Tiny (fast) or Base (accurate,
 ~4 s wait after you stop speaking). 4+ core PC (typical church desktop) →
