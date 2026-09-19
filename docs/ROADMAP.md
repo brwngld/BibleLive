@@ -102,6 +102,8 @@ are designed-in (schemas, command bus) but shipped later.
 - [x] Output transitions (fade / slide) when projected content changes
 - [x] Saved theme templates: capture a display's whole look by name, apply
       to any display in one click
+- [x] Settings page (5th tab) + classic two-row header; backup/restore;
+      verse ranges; WEB Bible; service queue; lower-third announcements
 
 ## M6+ — Church Edition & beyond
 - [ ] **Designed theme templates** (requested): built-in, artist-designed
@@ -110,7 +112,7 @@ are designed-in (schemas, command bus) but shipped later.
       samples (screenshots of liked designs, background image packs, or
       theme/.pptx files from other software); we then recreate them as
       built-in presets.
-- [ ] Notification/lower-third alert overlays (ticker announcements)
+- [x] Notification/lower-third alerts (banner announcement over any display)
 - [ ] Service queue view (planned order, drag to re-order, go-live)
 - [ ] Roles (Admin/Operator/Presenter/Viewer) + private content access control
 - [ ] **Phone companion app** (requested): connects to the desktop over the
