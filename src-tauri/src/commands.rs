@@ -59,6 +59,60 @@ pub fn open_data_folder() -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+// ---- Announcements (lower-third alerts) -----------------------------------
+
+/// A transient announcement overlaid on one display's output without
+/// touching its content. The output window auto-hides after duration_ms
+/// (duration_ms = 0 → stays until hide_notification).
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct NotifyPayload {
+    pub slot: u8,
+    pub id: u64,
+    pub text: String,
+    pub duration_ms: u64,
+}
+
+fn notify_id() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+#[tauri::command]
+pub fn notify_display(
+    app: tauri::AppHandle,
+    slot: u8,
+    text: String,
+    duration_ms: u64,
+) -> Result<(), String> {
+    if !(1..=5).contains(&slot) {
+        return Err("slot must be 1-5".into());
+    }
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        return Err("announcement text is empty".into());
+    }
+    let _ = app.emit(
+        "display-notify",
+        NotifyPayload { slot, id: notify_id(), text, duration_ms },
+    );
+    Ok(())
+}
+
+#[tauri::command]
+pub fn hide_notification(app: tauri::AppHandle, slot: u8) -> Result<(), String> {
+    if !(1..=5).contains(&slot) {
+        return Err("slot must be 1-5".into());
+    }
+    let _ = app.emit(
+        "display-notify",
+        NotifyPayload { slot, id: notify_id(), text: String::new(), duration_ms: 0 },
+    );
+    Ok(())
+}
+
 // ---- Service queue --------------------------------------------------------
 
 #[derive(serde::Serialize)]

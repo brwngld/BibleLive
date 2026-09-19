@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
 import { displayApi, onDisplayUpdate, type SlotContent, type SlotView } from "./api";
 
 /**
@@ -21,6 +22,9 @@ export default function OutputWindow({ slot }: { slot: number }) {
   // whenever the displayed text changes and the slot's style asks for one.
   const [animClass, setAnimClass] = useState<string | null>(null);
   const contentSig = useRef("");
+  // Lower-third announcement overlay (independent of slot content).
+  const [notice, setNotice] = useState<{ id: number; text: string; durationMs: number } | null>(null);
+  const noticeTimer = useRef<number | undefined>(undefined);
   const prevActive = useRef(false);
   const toastTimer = useRef<number | undefined>(undefined);
   const scriptureRef = useRef<HTMLDivElement>(null);
@@ -47,6 +51,31 @@ export default function OutputWindow({ slot }: { slot: number }) {
       }
     }).catch(console.error);
     return () => un?.();
+  }, [slot]);
+
+  // Announcements: show/hide via the display-notify event; auto-hide.
+  useEffect(() => {
+    let un: (() => void) | undefined;
+    listen<{ slot: number; id: number; text: string; durationMs: number }>(
+      "display-notify",
+      (ev) => {
+        const p = ev.payload;
+        if (p.slot !== slot) return;
+        window.clearTimeout(noticeTimer.current);
+        if (!p.text) {
+          setNotice(null);
+          return;
+        }
+        setNotice({ id: p.id, text: p.text, durationMs: p.durationMs });
+        if (p.durationMs > 0) {
+          noticeTimer.current = window.setTimeout(() => setNotice(null), p.durationMs);
+        }
+      },
+    ).then((u) => (un = u));
+    return () => {
+      un?.();
+      window.clearTimeout(noticeTimer.current);
+    };
   }, [slot]);
 
   // Fire the configured transition when the displayed text changes.
@@ -287,6 +316,12 @@ export default function OutputWindow({ slot }: { slot: number }) {
       {!blank && (
         <div className="output-page-indicator" style={{ color: textColor }}>
           {view.page}
+        </div>
+      )}
+
+      {notice && (
+        <div className="output-notice" key={notice.id} style={{ color: textColor }}>
+          {notice.text}
         </div>
       )}
 

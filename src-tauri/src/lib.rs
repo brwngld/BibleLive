@@ -250,6 +250,8 @@ pub fn run() {
             commands::move_queue_item,
             commands::clear_queue,
             commands::show_queue_item,
+            commands::notify_display,
+            commands::hide_notification,
             commands::library_stats,
             commands::list_content,
             commands::get_content,

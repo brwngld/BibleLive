@@ -929,6 +929,46 @@ textarea:focus {
   height: 100%;
   background: #000000;
 }
+
+/* Lower-third announcement overlay — sits above any content, never
+   touches it; slides up from the bottom edge. */
+.output-notice {
+  position: fixed;
+  left: 50%;
+  bottom: 6vh;
+  transform: translateX(-50%);
+  max-width: 84vw;
+  background: rgba(10, 15, 28, 0.88);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 14px;
+  padding: 2.2vh 3vw;
+  font-family: "Segoe UI", sans-serif;
+  font-size: 2.6vw;
+  font-weight: 600;
+  text-align: center;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+  z-index: 5;
+  animation: notice-up 0.45s ease-out;
+  pointer-events: none;
+}
+@keyframes notice-up {
+  from { opacity: 0; transform: translate(-50%, 40px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+/* Live page announcement controls */
+.notify-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.notify-row input {
+  flex: 1;
+  min-width: 0;
+}
+.notify-row select {
+  max-width: 90px;
+}
 .output-hint {
   position: fixed;
   bottom: 3vh;

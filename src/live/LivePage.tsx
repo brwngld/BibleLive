@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { queueApi, serviceApi, type QueueEntry, type SessionItemRow, type SessionMeta } from "./api";
 import * as lib from "../library/api";
 import type { ContentSummary } from "../library/types";
@@ -29,6 +30,11 @@ export default function LivePage() {
   >({});
   const [slots, setSlots] = useState<SlotView[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  // lower-third announcement
+  const [notifyText, setNotifyText] = useState("");
+  const [notifySlot, setNotifySlot] = useState(1);
+  const [notifyDuration, setNotifyDuration] = useState(30_000);
 
   // service queue
   const [queue, setQueue] = useState<QueueEntry[]>([]);
@@ -82,6 +88,28 @@ export default function LivePage() {
     act(async () => {
       await queueApi.addReference(text);
     });
+  }
+
+  async function showAnnouncement(text: string) {
+    const t = text.trim();
+    if (!t) return;
+    try {
+      await invoke("notify_display", {
+        slot: notifySlot,
+        text: t,
+        durationMs: notifyDuration,
+      });
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function hideAnnouncement() {
+    try {
+      await invoke("hide_notification", { slot: notifySlot });
+    } catch (e) {
+      setError(String(e));
+    }
   }
 
   async function addContentItem(id: string) {
@@ -440,6 +468,51 @@ export default function LivePage() {
           </div>
           <div className="hotkey-mini muted">
             Ctrl+Alt+1–5 select · Ctrl+Alt+←/→ step · Ctrl+Alt+B blank
+          </div>
+        </section>
+
+        {/* Announcements */}
+        <section className="panel">
+          <h3>📣 Announcement</h3>
+          <p className="muted">
+            A lower-third banner over the chosen display — the content behind
+            it is untouched and it disappears by itself.
+          </p>
+          <div className="notify-row">
+            <input
+              value={notifyText}
+              onChange={(e) => setNotifyText(e.currentTarget.value)}
+              onKeyDown={(e) => e.key === "Enter" && showAnnouncement(notifyText)}
+              placeholder="e.g., Lunch is served in the hall after service"
+            />
+            <select
+              value={notifySlot}
+              onChange={(e) => setNotifySlot(Number(e.currentTarget.value))}
+              title="Which display shows the banner"
+            >
+              {[1, 2, 3, 4, 5].map((n) => (
+                <option key={n} value={n}>
+                  D{n}
+                </option>
+              ))}
+            </select>
+            <select
+              value={notifyDuration}
+              onChange={(e) => setNotifyDuration(Number(e.currentTarget.value))}
+              title="How long the banner stays"
+            >
+              <option value={10_000}>10 s</option>
+              <option value={30_000}>30 s</option>
+              <option value={60_000}>1 min</option>
+              <option value={300_000}>5 min</option>
+              <option value={0}>Until hidden</option>
+            </select>
+          </div>
+          <div className="form-actions">
+            <button className="primary" onClick={() => showAnnouncement(notifyText)}>
+              Show banner
+            </button>
+            <button onClick={hideAnnouncement}>Hide</button>
           </div>
         </section>
 
