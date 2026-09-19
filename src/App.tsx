@@ -7,22 +7,23 @@ import VoicePage from "./voice/VoicePage";
 import DisplaysPage from "./display/DisplaysPage";
 import LivePage from "./live/LivePage";
 import MenuBar, { type MenuAction, type Tab } from "./menu/MenuBar";
-import SettingsDialog from "./settings/SettingsDialog";
+import SettingsPage from "./settings/SettingsPage";
 import ShortcutsDialog from "./menu/ShortcutsDialog";
 import { serviceApi } from "./live/api";
 
-const TABS: Tab[] = ["library", "displays", "voice", "live"];
+const TABS: Tab[] = ["library", "displays", "voice", "live", "settings"];
 
 const TAB_LABELS: Record<Tab, string> = {
   library: "📚 Library",
   displays: "🖼 Displays",
   voice: "🎙 Voice",
   live: "🎛 Live Service",
+  settings: "⚙ Settings",
 };
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("library");
-  const [dialog, setDialog] = useState<null | "settings" | "shortcuts">(null);
+  const [dialog, setDialog] = useState<null | "shortcuts">(null);
   // Bumped each time File → Import is used; LibraryPage opens its import
   // dialog on change (works both from another tab and while on Library).
   const [importRequest, setImportRequest] = useState(0);
@@ -66,12 +67,9 @@ export default function App() {
       case "blankAll":
         serviceApi.blankAll(a.blank).catch(console.error);
         break;
-      case "settings":
-        setDialog("settings");
-        break;
       case "micTest":
       case "diagnostics":
-        setTab("voice");
+        setTab("settings"); // the audio tools live in Settings now
         break;
       case "openDataFolder":
         invoke("open_data_folder").catch(console.error);
@@ -138,12 +136,13 @@ export default function App() {
           <DisplaysPage />
         ) : tab === "voice" ? (
           <VoicePage />
+        ) : tab === "settings" ? (
+          <SettingsPage />
         ) : (
           <LivePage />
         )}
       </main>
 
-      {dialog === "settings" && <SettingsDialog onClose={() => setDialog(null)} />}
       {dialog === "shortcuts" && <ShortcutsDialog onClose={() => setDialog(null)} />}
 
       {confirmRestore && (

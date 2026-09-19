@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { displayApi, type DisplayProfile } from "../display/api";
 
-export type Tab = "library" | "displays" | "voice" | "live";
+export type Tab = "library" | "displays" | "voice" | "live" | "settings";
 
 export type MenuAction =
   | { kind: "go"; tab: Tab }
@@ -9,7 +9,6 @@ export type MenuAction =
   | { kind: "manageProfiles" }
   | { kind: "applyProfile"; name: string }
   | { kind: "blankAll"; blank: boolean }
-  | { kind: "settings" }
   | { kind: "micTest" }
   | { kind: "diagnostics" }
   | { kind: "openDataFolder" }
@@ -31,6 +30,7 @@ const GO_ENTRIES: Entry[] = [
   { label: "🖼 Displays", hint: "Ctrl+2", action: { kind: "go", tab: "displays" } },
   { label: "🎙 Voice", hint: "Ctrl+3", action: { kind: "go", tab: "voice" } },
   { label: "🎛 Live Service", hint: "Ctrl+4", action: { kind: "go", tab: "live" } },
+  { label: "⚙ Settings", hint: "Ctrl+5", action: { kind: "go", tab: "settings" } },
 ];
 
 /**
@@ -101,7 +101,7 @@ export default function MenuBar({ onAction }: { onAction: (a: MenuAction) => voi
     },
     {
       name: "Settings",
-      entries: [{ label: "Open Settings…", action: { kind: "settings" } }],
+      entries: [{ label: "Open Settings", hint: "Ctrl+5", action: { kind: "go", tab: "settings" } }],
     },
     {
       name: "Tools",
@@ -115,7 +115,7 @@ export default function MenuBar({ onAction }: { onAction: (a: MenuAction) => voi
       name: "Help",
       entries: [
         { label: "Keyboard shortcuts", action: { kind: "shortcuts" } },
-        { label: "About BibleLive", action: { kind: "settings" } },
+        { label: "About BibleLive", action: { kind: "go", tab: "settings" } },
       ],
     },
   ];

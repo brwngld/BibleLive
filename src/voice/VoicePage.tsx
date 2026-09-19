@@ -7,13 +7,9 @@ import {
   onAutoShown,
   onLevel,
   type UnlistenFn,
-  type AudioDeviceInfo,
-  type AudioTestResult,
   type Suggestion,
-  type VoiceConfig,
   type TranscriptEvent,
   type SuggestionEvent,
-  type VoiceDiagnostics,
 } from "./api";
 import { displayApi } from "../display/api";
 import { ITEM_TYPE_LABELS, type ItemType } from "../library/types";
@@ -24,22 +20,13 @@ interface TranscriptLine {
 }
 
 export default function VoicePage() {
-  const [devices, setDevices] = useState<AudioDeviceInfo[]>([]);
-  const [config, setConfig] = useState<VoiceConfig | null>(null);
   const [mode, setMode] = useState("assisted");
   const [listening, setListening] = useState(false);
   const [model, setModel] = useState<{ exists: boolean; path: string; sizeMb: number | null } | null>(null);
   const [transcript, setTranscript] = useState<TranscriptLine[]>([]);
   const [partial, setPartial] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
-  const [testRunning, setTestRunning] = useState(false);
   const [level, setLevel] = useState(0);
-  const [buildTag, setBuildTag] = useState("");
-  const [sttModel, setSttModel] = useState("base");
-  const [autoTarget, setAutoTarget] = useState("auto");
-  const [diagRunning, setDiagRunning] = useState(false);
-  const [diagText, setDiagText] = useState<string | null>(null);
-  const [testResult, setTestResult] = useState<AudioTestResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Automatic mode: id → { slot, until } while an Undo window is open.
   const [autoShown, setAutoShown] = useState<
@@ -52,25 +39,9 @@ export default function VoicePage() {
     voiceApi.suggestions().then(setSuggestions).catch(() => {});
   }, []);
 
-  // Device lists go stale (mics plugged in after launch, DroidCam started
-  // later, Bluetooth headsets pairing) — re-query whenever the user might
-  // be about to look for a new device.
-  const refreshDevices = useCallback(() => {
-    voiceApi.listDevices().then(setDevices).catch(console.error);
-  }, []);
-
   useEffect(() => {
-    refreshDevices();
-    voiceApi.getConfig().then(setConfig).catch(console.error);
     voiceApi.getMode().then(setMode).catch(console.error);
     voiceApi.modelStatus().then(setModel).catch(console.error);
-    voiceApi.sttModel().then(setSttModel).catch(console.error);
-    voiceApi.autoTarget().then(setAutoTarget).catch(console.error);
-    import("@tauri-apps/api/core").then(({ invoke }) =>
-      invoke<{ version: string; build: string }>("app_status")
-        .then((st) => setBuildTag(`v${st.version} · built ${st.build}`))
-        .catch(() => {}),
-    );
     voiceApi.listeningStatus().then(setListening).catch(console.error);
     refreshSuggestions();
 
@@ -132,23 +103,6 @@ export default function VoicePage() {
     };
   }, [refreshSuggestions]);
 
-  useEffect(() => {
-    const onFocus = () => refreshDevices();
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
-  }, [refreshDevices]);
-
-  async function saveConfig(patch: Partial<VoiceConfig>) {
-    if (!config) return;
-    const next = { ...config, ...patch };
-    setConfig(next);
-    try {
-      await voiceApi.setConfig(next);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
   async function toggleListening() {
     setError(null);
     try {
@@ -174,47 +128,11 @@ export default function VoicePage() {
     }
   }
 
-  async function changeSttModel(m: string) {
-    const prev = sttModel;
-    setSttModel(m);
-    try {
-      await voiceApi.setSttModel(m);
-    } catch (e) {
-      setSttModel(prev);
-      setError(String(e));
-    }
-  }
-
-  async function changeAutoTarget(t: string) {
-    const prev = autoTarget;
-    setAutoTarget(t);
-    try {
-      await voiceApi.setAutoTarget(t);
-    } catch (e) {
-      setAutoTarget(prev);
-      setError(String(e));
-    }
-  }
-
   async function undoAutoShow(id: string) {
     try {
       await voiceApi.undoAutoShow(id);
     } catch (e) {
       setError(String(e));
-    }
-  }
-
-  async function runTest() {
-    setTestRunning(true);
-    setTestResult(null);
-    setError(null);
-    try {
-      const result = await voiceApi.audioTest();
-      setTestResult(result);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setTestRunning(false);
     }
   }
 
@@ -241,10 +159,6 @@ export default function VoicePage() {
   }
 
   const pending = suggestions.filter((s) => s.status === "pending");
-  const savedDeviceMissing =
-    !!config?.device &&
-    devices.length > 0 &&
-    !devices.some((d) => d.name === config.device);
 
   return (
     <div className="voice-page">
@@ -255,208 +169,7 @@ export default function VoicePage() {
         </div>
       )}
 
-      <div className="voice-grid">
-        {/* ---- Audio setup ---- */}
-        <section className="panel">
-          <h3>🎙 Audio Setup</h3>
-          <p className="muted">
-            How is your church audio connected? Speech-only means a dedicated
-            mic or mixer aux channel; Mixed means the full church mix.
-          </p>
-          <label>
-            Audio source
-            <select
-              value={config?.device ?? ""}
-              onFocus={refreshDevices}
-              onChange={(e) =>
-                saveConfig({ device: e.currentTarget.value || null })
-              }
-            >
-              <option value="">System default input</option>
-              {savedDeviceMissing && config?.device && (
-                <option value={config.device}>
-                  {config.device} — not found on this PC
-                </option>
-              )}
-              {devices.map((d) => (
-                <option key={d.name} value={d.name}>
-                  {d.name} {d.isDefault ? "(default)" : ""}{" "}
-                  {d.sampleRate ? `· ${d.sampleRate} Hz` : ""}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button onClick={refreshDevices} style={{ alignSelf: "flex-start" }}>
-            ↻ Re-scan devices
-          </button>
-          {savedDeviceMissing && (
-            <div className="warning">
-              ⚠ Saved audio device <b>{config?.device}</b> is not available on
-              this PC (settings carried over from another machine?). Listening
-              will use the <b>System default input</b> until you pick a device
-              above.
-            </div>
-          )}
-          <label>
-            What does this source contain?
-            <select
-              value={config?.contentType ?? "speech"}
-              onChange={(e) =>
-                saveConfig({
-                  contentType: e.currentTarget.value as VoiceConfig["contentType"],
-                })
-              }
-            >
-              <option value="speech">Speech only (mic / mixer aux)</option>
-              <option value="mixed">Mixed church audio</option>
-            </select>
-          </label>
-          <label>
-            Speech sensitivity
-            <input
-              type="range"
-              min="0.001"
-              max="0.05"
-              step="0.001"
-              value={config?.vadThreshold ?? 0.015}
-              onChange={(e) =>
-                saveConfig({ vadThreshold: Number(e.currentTarget.value) })
-              }
-            />
-            <span className="muted">
-              threshold {(config?.vadThreshold ?? 0).toFixed(3)} · auto-adapts
-              to room noise (this is the minimum)
-            </span>
-          </label>
-          <label>
-            Transcription model
-            <select value={sttModel} onChange={(e) => changeSttModel(e.currentTarget.value)}>
-              <option value="base">Base — most accurate (default)</option>
-              <option value="tiny">Tiny — faster on slower PCs</option>
-            </select>
-            <span className="muted">
-              Tiny transcribes ~4× faster but makes more mistakes.
-            </span>
-          </label>
-          <label>
-            Live matching window
-            <select
-              value={config?.partialWindowMs ?? 2000}
-              onChange={(e) =>
-                saveConfig({ partialWindowMs: Number(e.currentTarget.value) })
-              }
-            >
-              <option value="1200">1.2 s — snappiest</option>
-              <option value="2000">2 s — recommended</option>
-              <option value="3000">3 s</option>
-              <option value="4000">4 s — gentlest</option>
-            </select>
-            <span className="muted">
-              How often live text and Scripture matches update while someone
-              is still speaking.
-            </span>
-          </label>
-          <label>
-            Automatic mode target display
-            <select
-              value={autoTarget}
-              onChange={(e) => changeAutoTarget(e.currentTarget.value)}
-            >
-              <option value="auto">First AUTO display</option>
-              {[1, 2, 3, 4, 5].map((n) => (
-                <option key={n} value={String(n)}>
-                  Always Display {n}
-                </option>
-              ))}
-            </select>
-            <span className="muted">
-              Which screen Automatic mode projects verified Scripture on. A
-              display set to LOCK is never taken over.
-            </span>
-          </label>
-
-          {buildTag && <div className="muted build-tag">{buildTag}</div>}
-
-          <h3>🔬 Diagnostics</h3>
-          <p className="muted">
-            Speaks straight through the whole audio path and reports exact
-            numbers. Speak normally for the whole capture.
-          </p>
-          <button
-            disabled={diagRunning}
-            onClick={async () => {
-              setDiagRunning(true);
-              setDiagText(null);
-              try {
-                const report = (await voiceApi.diagnostics(10)) as unknown as VoiceDiagnostics;
-                const text = JSON.stringify(report, null, 2);
-                setDiagText(text);
-                try {
-                  await navigator.clipboard.writeText(text);
-                  setDiagText(text + "\n\n(copied to clipboard — paste it to Bernard)");
-                } catch {
-                  setDiagText(
-                    text +
-                      "\n\n(saved to %APPDATA%\\BibleLive\\diagnostics-report.txt — send that file)",
-                  );
-                }
-              } catch (e) {
-                setDiagText("Diagnostics failed: " + String(e));
-              } finally {
-                setDiagRunning(false);
-              }
-            }}
-          >
-            {diagRunning ? "Capturing… speak now (10s)" : "🔬 Run diagnostics & produce report"}
-          </button>
-          {diagText && (
-            <>
-              <pre className="diag-report">{diagText}</pre>
-            </>
-          )}
-
-          <h3>🧪 Audio Test</h3>
-          <p className="muted">
-            The system listens for 8 seconds. Say: “Testing BibleLive.”
-          </p>
-          <button className="primary" onClick={runTest} disabled={testRunning}>
-            {testRunning ? "Listening… (8s)" : "Run audio test"}
-          </button>
-          {testResult && (
-            <div className="test-result">
-              <div>
-                Input: <b>{testResult.device}</b>
-              </div>
-              <div className="level-bar">
-                <div
-                  className={
-                    "level-fill " +
-                    (testResult.peakLevel > 0.005 ? "good" : "low")
-                  }
-                  style={{
-                    width: `${Math.min(100, testResult.peakLevel * 2000)}%`,
-                  }}
-                />
-              </div>
-              <div>
-                Signal: <b>{testResult.peakLevel > 0.005 ? "Good" : "Low"}</b>{" "}
-                · Speech detected:{" "}
-                <b>{testResult.speechDetected ? "YES" : "NO"}</b>
-              </div>
-              {testResult.transcript && (
-                <div className="muted">“{testResult.transcript}”</div>
-              )}
-              {!testResult.speechDetected && (
-                <div className="warning">
-                  Nobody spoke during the test. Run it again and speak
-                  continuously for the whole 8 seconds — e.g. “Testing
-                  BibleLive, one, two, three.”
-                </div>
-              )}
-            </div>
-          )}
-        </section>
-
+      <div className="voice-grid voice-console">
         {/* ---- Live listening ---- */}
         <section className="panel">
           <h3>
@@ -483,7 +196,7 @@ export default function VoicePage() {
             {mode === "assisted" &&
               "Scripture detected is shown here for you to approve."}
             {mode === "automatic" &&
-              "High-confidence verified matches project automatically to the target display chosen above (default: first slot set to AUTO). UNDO is offered for 10 seconds."}
+              "High-confidence verified matches project automatically to the target display chosen in ⚙ Settings (default: first slot set to AUTO — changeable on the Live page too). UNDO is offered for 10 seconds."}
           </p>
           <button
             className={listening ? "danger" : "primary"}
@@ -502,7 +215,7 @@ export default function VoicePage() {
           </div>
           <p className="muted">
             Speak into the microphone — the bar should jump while you talk.
-            If it barely moves, raise the sensitivity above.
+            If it barely moves, raise the sensitivity in ⚙ Settings.
           </p>
 
           <h4>Transcript</h4>

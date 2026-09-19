@@ -8,5 +8,5 @@ export const HOTKEYS: [string, string][] = [
   ["Tab / Shift+Tab (in output)", "Cycle between open fullscreen outputs"],
   ["M (in output)", "Move this output to the next screen"],
   ["Esc (in output)", "Close a fullscreen output"],
-  ["Ctrl+1…4 (main window)", "Switch between the app pages"],
+  ["Ctrl+1…5 (main window)", "Switch between the app pages"],
 ];
