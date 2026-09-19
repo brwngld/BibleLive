@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { serviceApi, type SessionItemRow, type SessionMeta } from "./api";
+import { queueApi, serviceApi, type QueueEntry, type SessionItemRow, type SessionMeta } from "./api";
+import * as lib from "../library/api";
+import type { ContentSummary } from "../library/types";
 import { voiceApi, onSuggestion, onAutoShown, type Suggestion } from "../voice/api";
 import { displayApi, onDisplayUpdate, type SlotView } from "../display/api";
 
@@ -28,12 +30,27 @@ export default function LivePage() {
   const [slots, setSlots] = useState<SlotView[]>([]);
   const [error, setError] = useState<string | null>(null);
 
+  // service queue
+  const [queue, setQueue] = useState<QueueEntry[]>([]);
+  const [queueInput, setQueueInput] = useState("");
+  const [queueSlot, setQueueSlot] = useState(1);
+  const queueSlotInit = useRef(false);
+  const [libraryItems, setLibraryItems] = useState<ContentSummary[]>([]);
+
   const logRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<SessionMeta | null>(null);
   sessionRef.current = session;
 
   const refreshSlots = useCallback(() => {
-    displayApi.slots().then(setSlots).catch(() => {});
+    displayApi.slots().then((vs) => {
+      setSlots(vs);
+      // First load: point the queue at whichever display is the hotkey target.
+      const active = vs.find((v) => v.active);
+      if (active && !queueSlotInit.current) {
+        queueSlotInit.current = true;
+        setQueueSlot(active.slot);
+      }
+    }).catch(() => {});
   }, []);
 
   const refreshHistory = useCallback(() => {
@@ -45,6 +62,51 @@ export default function LivePage() {
     if (s) serviceApi.items(s.id).then(setLog).catch(() => {});
   }, []);
 
+  const refreshQueue = useCallback(() => {
+    queueApi.list().then(setQueue).catch(() => {});
+  }, []);
+
+  async function act(fn: () => Promise<unknown>) {
+    try {
+      await fn();
+      refreshQueue();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  function addReference() {
+    const text = queueInput.trim();
+    if (!text) return;
+    setQueueInput("");
+    act(async () => {
+      await queueApi.addReference(text);
+    });
+  }
+
+  async function addContentItem(id: string) {
+    if (!id) return;
+    act(async () => {
+      const full = await lib.getContent(id);
+      const sections = full.body.sections ?? [];
+      const first = sections[0];
+      const label = (first?.label || "Section 1").trim();
+      const slug = label
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter(Boolean)
+        .join("-");
+      const key = slug ? `${slug}-1` : "section-1";
+      await queueApi.addItem({
+        itemId: id,
+        key,
+        label: label,
+        title: full.title,
+        kind: full.itemType === "slide" ? "slide" : "lyrics",
+      });
+    });
+  }
+
   // initial load + event subscriptions
   useEffect(() => {
     serviceApi.current().then(setSession).catch(() => {});
@@ -54,6 +116,12 @@ export default function LivePage() {
     voiceApi.getMode().then(setMode).catch(() => {});
     voiceApi.autoTarget().then(setAutoTarget).catch(() => {});
     voiceApi.suggestions().then(setSuggestions).catch(() => {});
+    refreshQueue();
+    Promise.all([
+      lib.listContent({ itemType: "slide" }),
+      lib.listContent({ itemType: "hymn" }),
+      lib.listContent({ itemType: "song" }),
+    ]).then(([slides, hymns, songs]) => setLibraryItems([...slides, ...hymns, ...songs])).catch(() => {});
 
     let uns: Promise<UnlistenFnLike>[] = [];
     uns.push(
@@ -373,6 +441,70 @@ export default function LivePage() {
           <div className="hotkey-mini muted">
             Ctrl+Alt+1–5 select · Ctrl+Alt+←/→ step · Ctrl+Alt+B blank
           </div>
+        </section>
+
+        {/* Service queue */}
+        <section className="panel">
+          <h3>📋 Queue {queue.length > 0 && `(${queue.length})`}</h3>
+          <div className="queue-add">
+            <input
+              value={queueInput}
+              onChange={(e) => setQueueInput(e.currentTarget.value)}
+              onKeyDown={(e) => e.key === "Enter" && addReference()}
+              placeholder="Add reference — John 3:16-18"
+            />
+            <button onClick={addReference}>＋</button>
+            <select
+              value=""
+              onChange={(e) => addContentItem(e.currentTarget.value)}
+              title="Add a slide, hymn or song set (starts at its first section)"
+            >
+              <option value="">＋ Slide / song…</option>
+              {libraryItems.map((i) => (
+                <option key={i.id} value={i.id}>
+                  {i.title}
+                </option>
+              ))}
+            </select>
+            <select
+              value={queueSlot}
+              onChange={(e) => setQueueSlot(Number(e.currentTarget.value))}
+              title="Display the queue projects onto"
+            >
+              {[1, 2, 3, 4, 5].map((n) => (
+                <option key={n} value={n}>
+                  → D{n}
+                </option>
+              ))}
+            </select>
+          </div>
+          {queue.length === 0 ? (
+            <div className="empty">Plan the service here, then step through it.</div>
+          ) : (
+            queue.map((q, i) => (
+              <div key={q.id} className="queue-row">
+                <span className="queue-pos muted">{i + 1}</span>
+                <span className="queue-main">
+                  <b>{q.label}</b> <span className="muted">{q.label !== q.title ? q.title : ""}</span>
+                </span>
+                <button title="Move up" onClick={() => act(() => queueApi.move(q.id, -1))}>▲</button>
+                <button title="Move down" onClick={() => act(() => queueApi.move(q.id, 1))}>▼</button>
+                <button
+                  className="primary"
+                  title={`Show on Display ${queueSlot}`}
+                  onClick={() => act(() => queueApi.show(q.id, queueSlot))}
+                >
+                  Show
+                </button>
+                <button title="Remove" onClick={() => act(() => queueApi.remove(q.id))}>✕</button>
+              </div>
+            ))
+          )}
+          {queue.length > 0 && (
+            <div className="form-actions">
+              <button onClick={() => act(() => queueApi.clear())}>Clear queue</button>
+            </div>
+          )}
         </section>
 
         {/* Service log */}

@@ -87,6 +87,16 @@ CREATE TABLE IF NOT EXISTS session_items (
     label      TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_session_items ON session_items(session_id);
+
+CREATE TABLE IF NOT EXISTS service_queue (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id TEXT NOT NULL,
+    key     TEXT NOT NULL,              -- starting section key (stepping walks the set)
+    label   TEXT NOT NULL,              -- "John 3:16-18" / slide heading
+    title   TEXT NOT NULL,              -- item title
+    kind    TEXT NOT NULL DEFAULT 'scripture',
+    pos     INTEGER NOT NULL DEFAULT 0  -- explicit ordering (moves swap pos)
+);
 "#;
 
 /// Shared, thread-safe handle to the SQLite content database.
@@ -186,13 +196,14 @@ impl ContentStore {
 
     /// Tables making up a complete backup, in dependency order
     /// (content first, sessions last).
-    const BACKUP_TABLES: [&str; 6] = [
+    const BACKUP_TABLES: [&str; 7] = [
         "content_items",
         "search_index",
         "search_fts",
         "settings",
         "service_sessions",
         "session_items",
+        "service_queue",
     ];
 
     /// Full snapshot of every content/settings/session table as JSON.
@@ -612,6 +623,85 @@ impl ContentStore {
         Ok(())
     }
 
+    // ---- Service queue -------------------------------------------------------
+
+    pub fn queue_add(
+        &self,
+        item_id: &str,
+        key: &str,
+        label: &str,
+        title: &str,
+        kind: &str,
+    ) -> Result<(), ContentError> {
+        let mut conn = self.conn.lock();
+        let pos: i64 = conn.query_row(
+            "SELECT COALESCE(MAX(pos), 0) + 1 FROM service_queue",
+            [],
+            |r| r.get(0),
+        )?;
+        conn.execute(
+            "INSERT INTO service_queue (item_id, key, label, title, kind, pos)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![item_id, key, label, title, kind, pos],
+        )?;
+        Ok(())
+    }
+
+    pub fn queue_list(&self) -> Result<Vec<QueueItem>, ContentError> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, item_id, key, label, title, kind
+             FROM service_queue ORDER BY pos, id",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(QueueItem {
+                id: r.get(0)?,
+                item_id: r.get(1)?,
+                key: r.get(2)?,
+                label: r.get(3)?,
+                title: r.get(4)?,
+                kind: r.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn queue_remove(&self, id: i64) -> Result<(), ContentError> {
+        self.conn
+            .lock()
+            .execute("DELETE FROM service_queue WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn queue_clear(&self) -> Result<(), ContentError> {
+        self.conn.lock().execute("DELETE FROM service_queue", [])?;
+        Ok(())
+    }
+
+    /// Swap an item's position with its neighbor (delta -1 / +1).
+    pub fn queue_move(&self, id: i64, delta: i32) -> Result<(), ContentError> {
+        let mut conn = self.conn.lock();
+        let items: Vec<(i64, i64)> = {
+            let mut stmt = conn.prepare("SELECT id, pos FROM service_queue ORDER BY pos, id")?;
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        let Some(idx) = items.iter().position(|(i, _)| *i == id) else {
+            return Ok(());
+        };
+        let other = match delta {
+            -1 if idx > 0 => Some(idx - 1),
+            1 if idx + 1 < items.len() => Some(idx + 1),
+            _ => None,
+        };
+        if let Some(o) = other {
+            let (a, b) = (items[idx], items[o]);
+            conn.execute("UPDATE service_queue SET pos = ?1 WHERE id = ?2", params![b.1, a.0])?;
+            conn.execute("UPDATE service_queue SET pos = ?1 WHERE id = ?2", params![a.1, b.0])?;
+        }
+        Ok(())
+    }
+
     // ---- Settings ----------------------------------------------------------
 
     pub fn get_setting(&self, key: &str) -> Result<Option<String>, ContentError> {
@@ -705,6 +795,18 @@ fn default_data_dir() -> Result<PathBuf, ContentError> {
 /// Where the database, crash logs and settings live (for the Tools menu).
 pub fn data_dir() -> PathBuf {
     default_data_dir().unwrap_or_else(|_| dirs_fallback())
+}
+
+/// One planned entry in the service queue (Live page).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueItem {
+    pub id: i64,
+    pub item_id: String,
+    pub key: String,
+    pub label: String,
+    pub title: String,
+    pub kind: String,
 }
 
 /// JSON value → SQLite parameter for backup restore (backups only ever
@@ -987,5 +1089,30 @@ mod tests {
         let before = target.get_item("backup-song-1").unwrap().is_some();
         assert!(target.import_all(&serde_json::json!({"nope": true})).is_err());
         assert_eq!(target.get_item("backup-song-1").unwrap().is_some(), before);
+    }
+
+    /// Service queue: append order, move up/down swaps neighbors,
+    /// remove and clear.
+    #[test]
+    fn queue_add_move_remove() {
+        let store = test_store("queue");
+        for (i, label) in ["A", "B", "C"].iter().enumerate() {
+            store.queue_add("bible-kjv-john", &format!("john.3.{}", 16 + i), label, "John (KJV)", "scripture").unwrap();
+        }
+        let q = store.queue_list().unwrap();
+        assert_eq!(q.iter().map(|x| x.label.as_str()).collect::<Vec<_>>(), vec!["A", "B", "C"]);
+
+        // Move B to front.
+        store.queue_move(q[1].id, -1).unwrap();
+        let q = store.queue_list().unwrap();
+        assert_eq!(q.iter().map(|x| x.label.as_str()).collect::<Vec<_>>(), vec!["B", "A", "C"]);
+        // Moving the first item up is a no-op.
+        store.queue_move(q[0].id, -1).unwrap();
+        assert_eq!(store.queue_list().unwrap()[0].label, "B");
+
+        store.queue_remove(q[2].id).unwrap();
+        assert_eq!(store.queue_list().unwrap().len(), 2);
+        store.queue_clear().unwrap();
+        assert!(store.queue_list().unwrap().is_empty());
     }
 }

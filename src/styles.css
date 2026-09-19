@@ -275,6 +275,40 @@ textarea:focus {
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
   max-width: 70vw;
 }
+
+/* ---- Service queue (Live page) ---- */
+
+.queue-add {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.queue-add input {
+  flex: 1;
+  min-width: 0;
+}
+.queue-add select {
+  max-width: 150px;
+}
+.queue-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 4px;
+  border-bottom: 1px solid #1e293b;
+  font-size: 0.9em;
+}
+.queue-row .queue-pos {
+  width: 18px;
+  text-align: right;
+}
+.queue-row .queue-main {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .app-main {
   flex: 1;
   overflow: hidden;

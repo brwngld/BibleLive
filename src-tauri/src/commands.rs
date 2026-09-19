@@ -59,6 +59,189 @@ pub fn open_data_folder() -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+// ---- Service queue --------------------------------------------------------
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueEntry {
+    pub id: i64,
+    pub item_id: String,
+    pub key: String,
+    pub label: String,
+    pub title: String,
+    pub kind: String,
+}
+
+#[tauri::command]
+pub async fn list_queue(store: State<'_, ContentStore>) -> Result<Vec<QueueEntry>, String> {
+    let s = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        s.queue_list()
+            .map(|v| v.into_iter().map(|q| QueueEntry {
+                id: q.id, item_id: q.item_id, key: q.key, label: q.label, title: q.title, kind: q.kind,
+            }).collect())
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn clear_queue(store: State<'_, ContentStore>) -> Result<(), String> {
+    let s = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || s.queue_clear().map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueItemInput {
+    pub item_id: String,
+    pub key: String,
+    pub label: String,
+    pub title: String,
+    pub kind: String, // "scripture" | "slide" | "lyrics"
+}
+
+#[tauri::command]
+pub async fn add_queue_item(
+    store: State<'_, ContentStore>,
+    item: QueueItemInput,
+) -> Result<(), String> {
+    let s = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        s.queue_add(&item.item_id, &item.key, &item.label, &item.title, &item.kind)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Parse a typed reference ("John 3:16-18", "first corinthians 13") and
+/// queue the verse range (KJV preferred, falling back to ASV then WEB).
+#[tauri::command]
+pub async fn add_queue_reference(
+    store: State<'_, ContentStore>,
+    text: String,
+) -> Result<String, String> {
+    let s = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let r = crate::intelligence::parse_references(&text)
+            .into_iter()
+            .next()
+            .ok_or_else(|| "no Bible reference found in that text".to_string())?;
+        let mut keys = r.section_keys();
+        if keys.is_empty() {
+            // Chapter reference ("John 3") — start at verse 1.
+            let slug = crate::intelligence::canonical_book_slug(&r.book);
+            keys = vec![format!("{}.{}.1", slug, r.chapter)];
+        }
+        for version in ["kjv", "asv", "web"] {
+            let item_id = format!("bible-{version}-{}", keys[0].split('.').next().unwrap());
+            if s.get_item(&item_id).map(|o| o.is_some()).unwrap_or(false) {
+                s.queue_add(&item_id, &keys[0], &r.label(), &item_title(&s, &item_id), "scripture")
+                    .map_err(|e| e.to_string())?;
+                return Ok(r.label());
+            }
+        }
+        Err(format!("{} is not in the bundled library", r.label()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn item_title(store: &ContentStore, item_id: &str) -> String {
+    store
+        .get_item(item_id)
+        .ok()
+        .flatten()
+        .map(|i| i.title)
+        .unwrap_or_else(|| "Scripture".into())
+}
+
+#[tauri::command]
+pub async fn remove_queue_item(store: State<'_, ContentStore>, id: i64) -> Result<(), String> {
+    let s = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || s.queue_remove(id).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn move_queue_item(store: State<'_, ContentStore>, id: i64, delta: i32) -> Result<(), String> {
+    let s = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || s.queue_move(id, delta).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Project a queued item onto a display without removing it from the
+/// queue (the operator decides when to clear).
+#[tauri::command]
+pub async fn show_queue_item(
+    app: tauri::AppHandle,
+    store: State<'_, ContentStore>,
+    service: State<'_, Arc<ServiceState>>,
+    mgr: State<'_, DisplayManager>,
+    id: i64,
+    slot: u8,
+) -> Result<(), String> {
+    let s = store.inner().clone();
+    let entries = tauri::async_runtime::spawn_blocking(move || s.queue_list().map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())??;
+    let entry = entries.into_iter().find(|q| q.id == id).ok_or("queue item not found")?;
+    if entry.kind == "scripture" {
+        scripture_to_slot(&app, mgr.inner(), store.inner(), service.inner(), slot, entry.item_id, vec![entry.key]).await
+    } else {
+        // Slides / songs / hymns: load all sections, start at the queued one.
+        let s = store.inner().clone();
+        let item_id = entry.item_id.clone();
+        let key = entry.key.clone();
+        let found = tauri::async_runtime::spawn_blocking(move || s.get_song_sections(&item_id, &key))
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+        let Some((index, sections)) = found else {
+            return Err("queued section no longer exists".into());
+        };
+        let title = item_title(store.inner(), &entry.item_id);
+        let is_slide = store
+            .inner()
+            .get_item(&entry.item_id)
+            .ok()
+            .flatten()
+            .map(|i| i.item_type == ItemType::Slide)
+            .unwrap_or(false);
+        let content = SectionedContent::with_index(
+            entry.item_id.clone(),
+            if is_slide { RenderKind::Slide } else { RenderKind::Lyrics },
+            title.clone(),
+            sections,
+            index,
+        );
+        let label = content
+            .current_key()
+            .map(|_| entry.label.clone())
+            .unwrap_or_default();
+        mgr.set_sections(
+            slot,
+            if is_slide { content.revealing_first_line() } else { content },
+        );
+        record_item(
+            store.inner(),
+            service.inner(),
+            slot,
+            if is_slide { "slide" } else { "lyrics" },
+            &title,
+            &label,
+        );
+        display::emit_slot(&app, slot, mgr.inner());
+        Ok(())
+    }
+}
+
 /// Write a full snapshot of content + settings + service history to a
 /// JSON file (File → Backup data…).
 #[tauri::command]
