@@ -115,16 +115,15 @@ are designed-in (schemas, command bus) but shipped later.
 - [x] Notification/lower-third alerts (banner announcement over any display)
 - [ ] Service queue view (planned order, drag to re-order, go-live)
 - [ ] Roles (Admin/Operator/Presenter/Viewer) + private content access control
-- [ ] **Phone companion app** (requested): connects to the desktop over the
-      church LAN (no internet needed) for (a) remote control — suggestions
-      SHOW/IGNORE, display control, modes, audio settings — and (b) using the
-      phone's microphone as a wireless audio source streaming to the PC.
-      Desktop side needs: LAN server (WebSocket) exposing the existing
-      command bus + an audio-ingest path into the capture pipeline.
-- [ ] Local-network controllers (tablets, second PC)
-- [ ] Passage following (auto-advance verse by verse) — optional setting
+- [x] **Phone companion v1 (remote control)**: browser-first — the desktop
+      serves a PIN-gated mobile page over the church LAN (nothing to
+      install): display strip, stepping, blank, suggestion SHOW/IGNORE,
+      announcements. Remaining: phone microphone as a wireless audio
+      source streaming into the capture pipeline (audio ingest).
+- [x] Local-network controllers (phone browser remote; tablets work the same way)
+- [x] Passage auto-advance (per-display Off/5/10/15/30 s, stops at end/blank)
 - [ ] Partial-quote matching
-- [ ] More import formats (OpenLyrics/OpenSong XML, PDF)
+- [x] Song import: OpenLyrics + OpenSong XML (PDF remains open)
 - [ ] More Bible versions (e.g., WEB) + verse-range display in picker/suggestions
 - [ ] Backup / restore / export-import of the whole library
 - [ ] Cloud LLM option (paraphrase/story detection)
