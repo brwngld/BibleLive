@@ -133,6 +133,7 @@ pub fn run() {
                 let mgr = app.state::<crate::display::DisplayManager>();
                 mgr.load_styles(&store);
                 mgr.load_pair_versions(&store);
+                mgr.load_auto_advance(&store);
             }
 
             // Whisper models carried inside the installer: resolve them from
@@ -288,6 +289,7 @@ pub fn run() {
             commands::close_slot_output,
             commands::set_slot_scripture,
             commands::set_slot_pair,
+            commands::set_slot_auto_advance,
             commands::set_slot_section,
             commands::set_slot_media,
             commands::slot_step,

@@ -264,6 +264,25 @@ function SlotCard({
         </select>
       </label>
 
+      <label
+        className="slot-row"
+        title="Step through the passage automatically — stops at the end and on blank"
+      >
+        ⏱ Auto-advance
+        <select
+          value={String(view.autoAdvanceMs ?? 0)}
+          onChange={(e) =>
+            act(() => displayApi.setAutoAdvance(view.slot, Number(e.currentTarget.value) / 1000))
+          }
+        >
+          <option value="0">Off</option>
+          <option value="5000">Every 5 s</option>
+          <option value="10000">Every 10 s</option>
+          <option value="15000">Every 15 s</option>
+          <option value="30000">Every 30 s</option>
+        </select>
+      </label>
+
       <div className="mode-row">
         {(["auto", "manual", "lock"] as const).map((m) => (
           <button

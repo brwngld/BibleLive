@@ -25,6 +25,8 @@ export default function OutputWindow({ slot }: { slot: number }) {
   // Lower-third announcement overlay (independent of slot content).
   const [notice, setNotice] = useState<{ id: number; text: string; durationMs: number } | null>(null);
   const noticeTimer = useRef<number | undefined>(undefined);
+  // Per-display auto-advance interval (ms, 0 = off), from the slot view.
+  const [autoAdvanceMs, setAutoAdvanceMs] = useState(0);
   const prevActive = useRef(false);
   const toastTimer = useRef<number | undefined>(undefined);
   const scriptureRef = useRef<HTMLDivElement>(null);
@@ -36,6 +38,7 @@ export default function OutputWindow({ slot }: { slot: number }) {
     onDisplayUpdate((v: SlotView) => {
       if (v.slot !== slot) return;
       setView(v.content);
+      setAutoAdvanceMs(v.autoAdvanceMs ?? 0);
       if (v.active && !prevActive.current) {
         setToast(`Display ${slot} is active — Ctrl+Alt+←/→ step it`);
         window.clearTimeout(toastTimer.current);
@@ -47,6 +50,7 @@ export default function OutputWindow({ slot }: { slot: number }) {
       const mine = views.find((v) => v.slot === slot);
       if (mine) {
         setView(mine.content);
+        setAutoAdvanceMs(mine.autoAdvanceMs ?? 0);
         prevActive.current = mine.active;
       }
     }).catch(console.error);
@@ -77,6 +81,19 @@ export default function OutputWindow({ slot }: { slot: number }) {
       window.clearTimeout(noticeTimer.current);
     };
   }, [slot]);
+
+  // Passage auto-advance: while enabled and there is a next section,
+  // step forward on the interval. Any content change restarts the clock;
+  // blank screens and the end of the passage stop it.
+  useEffect(() => {
+    if (autoAdvanceMs === 0) return;
+    const blank = !view || view.blank || view.kind === "blank";
+    if (blank || !view?.hasNext) return;
+    const t = window.setTimeout(() => {
+      invoke("slot_step", { slot, delta: 1 }).catch(console.error);
+    }, autoAdvanceMs);
+    return () => window.clearTimeout(t);
+  }, [slot, autoAdvanceMs, view]);
 
   // Fire the configured transition when the displayed text changes.
   // Blanking doesn't animate; restoring re-triggers like fresh content.

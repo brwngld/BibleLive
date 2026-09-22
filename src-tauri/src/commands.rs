@@ -983,6 +983,41 @@ pub async fn set_slot_scripture(
     .await
 }
 
+/// Per-display passage auto-advance: Off or an interval in seconds. The
+/// output window steps forward on that interval and stops at the end of
+/// the passage.
+#[tauri::command]
+pub async fn set_slot_auto_advance(
+    app: tauri::AppHandle,
+    mgr: State<'_, DisplayManager>,
+    store: State<'_, ContentStore>,
+    slot: u8,
+    seconds: u64,
+) -> Result<(), String> {
+    if !(1..=5).contains(&slot) {
+        return Err("slot must be 1-5".into());
+    }
+    let ms = match seconds {
+        0 => 0,
+        5 => 5_000,
+        10 => 10_000,
+        15 => 15_000,
+        30 => 30_000,
+        other => return Err(format!("unsupported interval: {other}s (use 0/5/10/15/30)")),
+    };
+    mgr.set_auto_advance(slot, ms);
+    let store_c = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        store_c
+            .set_setting(&format!("display_auto_{slot}"), &ms.to_string())
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    display::emit_slot(&app, slot, mgr.inner());
+    Ok(())
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PairInput {

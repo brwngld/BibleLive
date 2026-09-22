@@ -212,6 +212,8 @@ pub struct SlotContentEvent {
     pub video_path: Option<String>,
     pub blank: bool,
     pub style: SlotStyle,
+    /// True when Step(+1) has more content (drives auto-advance).
+    pub has_next: bool,
     /// Translation tag of the primary scripture ("KJV"), set when paired.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
@@ -232,6 +234,8 @@ pub struct SlotView {
     pub active: bool,
     /// Configured second Bible version for this slot: None | "kjv" | "asv".
     pub pair_version: Option<String>,
+    /// Auto-advance interval in ms (0 = off).
+    pub auto_advance_ms: u64,
     pub content: SlotContentEvent,
 }
 
@@ -246,6 +250,8 @@ struct SlotState {
     pair: Option<SectionedContent>,
     /// The configured pairing for this slot ("kjv"/"asv"), persisted.
     pair_version: Option<String>,
+    /// Auto-advance interval in ms (0 = off): step forward automatically.
+    auto_advance_ms: u64,
 }
 
 impl Default for SlotState {
@@ -259,6 +265,7 @@ impl Default for SlotState {
             content: None,
             pair: None,
             pair_version: None,
+            auto_advance_ms: 0,
         }
     }
 }
@@ -292,6 +299,7 @@ fn empty_event(slot: u8) -> SlotContentEvent {
         video_path: None,
         blank: true,
         style: SlotStyle::default(),
+        has_next: false,
         version: None,
         pair: None,
     }
@@ -328,6 +336,7 @@ fn content_event(slot: u8, state: &SlotState) -> SlotContentEvent {
             video_path: video_path.clone(),
             blank: false,
             style: state.style.clone(),
+            has_next: false,
             version: None,
             pair: None,
         },
@@ -356,6 +365,7 @@ fn content_event(slot: u8, state: &SlotState) -> SlotContentEvent {
                 video_path: None,
                 blank: false,
                 style: state.style.clone(),
+                has_next: c.index + 1 < c.sections.len(),
                 version: None,
                 pair: None,
             };
@@ -377,6 +387,7 @@ fn content_event(slot: u8, state: &SlotState) -> SlotContentEvent {
         ev.kind = "blank".into();
         ev.blank = true;
         ev.pair = None;
+        ev.has_next = false;
     }
     ev
 }
@@ -448,6 +459,7 @@ impl DisplayManager {
                 degraded: s.degraded,
                 active: (i + 1) as u8 == active,
                 pair_version: s.pair_version.clone(),
+                auto_advance_ms: s.auto_advance_ms,
                 content: content_event((i + 1) as u8, s),
             })
             .collect()
@@ -483,6 +495,26 @@ impl DisplayManager {
         self.slots.lock()[(slot as usize).clamp(1, SLOT_COUNT) - 1]
             .pair_version
             .clone()
+    }
+
+    /// Auto-advance interval (ms) for a slot (0 = off).
+    pub fn auto_advance_of(&self, slot: u8) -> u64 {
+        self.slots.lock()[(slot as usize).clamp(1, SLOT_COUNT) - 1].auto_advance_ms
+    }
+
+    pub fn set_auto_advance(&self, slot: u8, ms: u64) {
+        self.slots.lock()[(slot as usize).clamp(1, SLOT_COUNT) - 1].auto_advance_ms = ms;
+    }
+
+    /// Load persisted auto-advance settings at startup (missing keys = off).
+    pub fn load_auto_advance(&self, store: &ContentStore) {
+        for slot in 1..=SLOT_COUNT as u8 {
+            if let Ok(Some(raw)) = store.get_setting(&format!("display_auto_{slot}")) {
+                if let Ok(ms) = raw.parse::<u64>() {
+                    self.set_auto_advance(slot, ms);
+                }
+            }
+        }
     }
 
     pub fn set_pair_version(&self, slot: u8, version: Option<String>) {
@@ -998,6 +1030,39 @@ mod tests {
         assert_eq!(ev.label, "Slide 2", "Next jumps straight to the next slide");
     }
 
+    /// Auto-advance plumbing: has_next marks the last section (and blank/
+    /// media), and the interval persists per slot.
+    #[test]
+    fn auto_advance_has_next_and_persistence() {
+        let mgr = DisplayManager::new();
+        let store = test_store("auto-advance");
+
+        mgr.set_sections(
+            1,
+            scripture("bible-kjv-john", "John (KJV)", &["john.3.16", "john.3.17", "john.3.18"], 0),
+        );
+        let ev = content_event(1, &mgr.slots.lock()[0]);
+        assert!(ev.has_next, "first of three has a next");
+        mgr.step(1, 2);
+        let ev = content_event(1, &mgr.slots.lock()[0]);
+        assert!(!ev.has_next, "last section has no next");
+
+        mgr.set_blank(1, true);
+        let ev = content_event(1, &mgr.slots.lock()[0]);
+        assert!(!ev.has_next, "blank never advances");
+
+        assert_eq!(mgr.auto_advance_of(1), 0, "off by default");
+        mgr.set_auto_advance(1, 10_000);
+        assert_eq!(mgr.auto_advance_of(1), 10_000);
+        mgr.load_auto_advance(&store);
+        assert_eq!(mgr.auto_advance_of(1), 10_000, "load keeps in-memory value when no key");
+        mgr.set_auto_advance(2, 30_000);
+        mgr.set_auto_advance(2, 0);
+        store.set_setting("display_auto_2", "15000").unwrap();
+        mgr.load_auto_advance(&store);
+        assert_eq!(mgr.auto_advance_of(2), 15_000, "load restores persisted interval");
+    }
+
     /// Theme templates: upsert by name, delete, and style validation on
     /// the way in.
     #[test]
@@ -1182,6 +1247,7 @@ pub fn emit_slot(app: &AppHandle, slot: u8, mgr: &DisplayManager) {
             degraded: s.degraded,
             active: slot == mgr.active_display(),
             pair_version: s.pair_version.clone(),
+            auto_advance_ms: s.auto_advance_ms,
             content: content_event(slot, s),
         }
     };

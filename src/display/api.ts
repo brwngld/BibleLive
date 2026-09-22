@@ -21,6 +21,8 @@ export type SlotContent = {
   videoPath: string | null;
   blank: boolean;
   style: SlotStyle;
+  /** True when Step(+1) has more content. */
+  hasNext?: boolean;
   /** Translation tag of the primary column ("KJV"), present when paired. */
   version?: string;
   /** Second column: the same verse in the paired translation. */
@@ -135,6 +137,8 @@ export interface SlotView {
   active: boolean;
   /** Second Bible version shown beside scripture: null | "kjv" | "asv". */
   pairVersion: string | null;
+  /** Auto-advance interval in ms (0 = off). */
+  autoAdvanceMs: number;
   content: SlotContent;
 }
 
@@ -162,6 +166,8 @@ export const displayApi = {
     invoke("set_slot_scripture", { input: { slot, itemId, keys } }),
   setPair: (slot: number, version: string | null) =>
     invoke("set_slot_pair", { input: { slot, version } }),
+  setAutoAdvance: (slot: number, seconds: number) =>
+    invoke("set_slot_auto_advance", { slot, seconds }),
   templates: () => invoke<ThemeTemplate[]>("list_theme_templates"),
   saveTemplate: (name: string, style: SlotStyle) =>
     invoke("save_theme_template", { name, style }),
