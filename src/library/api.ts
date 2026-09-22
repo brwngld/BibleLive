@@ -76,7 +76,8 @@ export async function pickFile(): Promise<string | null> {
   const path = await open({
     multiple: false,
     filters: [
-      { name: "Importable content", extensions: ["txt", "md", "docx"] },
+      { name: "Importable content", extensions: ["txt", "md", "docx", "xml"] },
+      { name: "Song XML (OpenLyrics / OpenSong)", extensions: ["xml"] },
     ],
   });
   return typeof path === "string" ? path : null;

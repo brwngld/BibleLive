@@ -1115,4 +1115,74 @@ mod tests {
         store.queue_clear().unwrap();
         assert!(store.queue_list().unwrap().is_empty());
     }
+
+    /// Song XML imports: OpenLyrics (structured) and OpenSong (bracket
+    /// markers) both produce labeled sections, and the file's own title
+    /// and author win over the dialog's.
+    #[test]
+    fn openlyrics_and_opsong_import() {
+        let openlyrics = r#"<?xml version="1.0" encoding="UTF-8"?>
+<lyrics xmlns="http://openlyrics.info/namespace/2009/song" version="0.8">
+  <properties>
+    <titles><title>Amazing Grace</title></titles>
+    <authors><author>John Newton</author></authors>
+  </properties>
+  <lyrics>
+    <verse name="v1">
+      <lines>Amazing grace how sweet the sound<br/>That saved a wretch like me</lines>
+    </verse>
+    <verse name="c1">
+      <lines>I once was lost but now am found</lines>
+    </verse>
+  </lyrics>
+</lyrics>"#;
+        let item = import::import_song_xml(
+            "song-ol".into(),
+            "dialog title".into(),
+            model::ItemType::Song,
+            openlyrics,
+            "en",
+            "public-domain",
+        )
+        .unwrap();
+        assert_eq!(item.title, "Amazing Grace", "file title wins");
+        assert_eq!(item.metadata["authors"][0], "John Newton");
+        let secs = item.body["sections"].as_array().unwrap();
+        assert_eq!(secs.len(), 2);
+        assert_eq!(secs[0]["label"], "Verse 1");
+        assert_eq!(secs[0]["lines"].as_array().unwrap().len(), 2, "<br/> splits lines");
+        assert_eq!(secs[1]["label"], "Chorus 1");
+
+        let opsong = r#"<song>
+  <title>Blessed Assurance</title>
+  <author>Fanny Crosby</author>
+  <lyrics>[V1]
+Blessed assurance Jesus is mine
+O what a foretaste of glory divine
+.
+[C]
+This is my story this is my song</lyrics>
+</song>"#;
+        let item = import::import_song_xml(
+            "song-os".into(),
+            "dialog title".into(),
+            model::ItemType::Song,
+            opsong,
+            "en",
+            "public-domain",
+        )
+        .unwrap();
+        assert_eq!(item.title, "Blessed Assurance");
+        let secs = item.body["sections"].as_array().unwrap();
+        assert_eq!(secs.len(), 2);
+        assert_eq!(secs[0]["label"], "Verse 1");
+        assert_eq!(secs[0]["lines"].as_array().unwrap().len(), 2);
+        assert_eq!(secs[1]["label"], "Chorus");
+
+        // Unrecognized XML is refused with a clear error.
+        assert!(import::import_song_xml(
+            "x".into(), "t".into(), model::ItemType::Song, "<root/>", "en", "cc0"
+        )
+        .is_err());
+    }
 }

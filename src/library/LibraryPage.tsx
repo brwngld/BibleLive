@@ -671,7 +671,7 @@ function ImportDialog({
             className={tab === "file" ? "active" : ""}
             onClick={() => setTab("file")}
           >
-            From file (.txt / .docx)
+            From file (.txt / .docx / .xml)
           </button>
         </div>
 

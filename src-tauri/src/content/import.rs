@@ -68,10 +68,285 @@ pub fn import_file(
             let text = extract_docx_text(path)?;
             import_text(id, title, item_type, &text, language, license)
         }
+        "xml" => {
+            let text = std::fs::read_to_string(path)?;
+            import_song_xml(id, title, item_type, &text, language, license)
+        }
         other => Err(ContentError::Other(format!(
-            "unsupported file type: .{} (supported: .txt, .docx)",
+            "unsupported file type: .{} (supported: .txt, .docx, .xml)",
             other
         ))),
+    }
+}
+
+/// Import a song from XML: OpenLyrics (`<lyrics>`) or OpenSong (`<song>`),
+/// sniffed from the root element. The file's own title/author win over the
+/// dialog's when present.
+pub fn import_song_xml(
+    id: String,
+    title: String,
+    item_type: ItemType,
+    xml: &str,
+    language: &str,
+    license: &str,
+) -> Result<ContentItem, ContentError> {
+    // Sniff the ROOT element: skip the XML declaration, then look at the
+    // first tag. (Containment would misroute OpenSong files — they embed a
+    // <lyrics> block inside <song>.)
+    let rest = xml.trim_start();
+    let rest = match rest.strip_prefix("<?xml") {
+        Some(after) => match after.find('>') {
+            Some(i) => &after[i + 1..],
+            None => rest,
+        },
+        None => rest,
+    };
+    let head = rest.trim_start();
+    if head.starts_with("<lyrics") {
+        import_openlyrics(id, title, item_type, xml, language, license)
+    } else if head.starts_with("<song") {
+        import_opsong(id, title, item_type, xml, language, license)
+    } else {
+        Err(ContentError::Other(
+            "not a recognized song XML (expected OpenLyrics <lyrics> or OpenSong <song>)"
+                .into(),
+        ))
+    }
+}
+
+/// Prettify a section tag: "v1" → "Verse 1", "c" → "Chorus"; unknown tags
+/// pass through unchanged.
+fn prettify_tag(tag: &str) -> String {
+    let t = tag.trim();
+    let split = t.find(|c: char| c.is_ascii_digit()).unwrap_or(t.len());
+    let (letters, num) = t.split_at(split);
+    let word = match letters.to_ascii_lowercase().as_str() {
+        "v" => "Verse",
+        "c" => "Chorus",
+        "b" => "Bridge",
+        "p" => "Pre-chorus",
+        "i" => "Intro",
+        "e" => "Ending",
+        "o" => "Outro",
+        "t" => "Tag",
+        _ => return t.to_string(),
+    };
+    if num.is_empty() {
+        word.to_string()
+    } else {
+        format!("{} {}", word, num)
+    }
+}
+
+/// OpenLyrics (openlyrics.info) — structured XML used by OpenLP and many
+/// other worship tools.
+pub fn import_openlyrics(
+    id: String,
+    title: String,
+    item_type: ItemType,
+    xml: &str,
+    language: &str,
+    license: &str,
+) -> Result<ContentItem, ContentError> {
+    use quick_xml::events::Event;
+
+    let mut reader = quick_xml::Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+
+    let mut file_title = String::new();
+    let mut author = String::new();
+    let mut in_title = false;
+    let mut in_author = false;
+    let mut sections: Vec<Section> = Vec::new();
+    let mut verse_name: Option<String> = None;
+    let mut lines_buf: Vec<String> = Vec::new();
+    let mut current_line = String::new();
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => match e.name().as_ref() {
+                b"title" => in_title = true,
+                b"author" => in_author = true,
+                b"verse" => {
+                    if let Some(n) = verse_name.take() {
+                        if !lines_buf.is_empty() {
+                            sections.push(Section { label: prettify_tag(&n), lines: std::mem::take(&mut lines_buf) });
+                        }
+                    }
+                    current_line.clear();
+                    for attr in e.attributes().flatten() {
+                        if attr.key.as_ref() == b"name" {
+                            verse_name = Some(String::from_utf8_lossy(&attr.value).trim().to_string());
+                        }
+                    }
+                }
+                b"br" | b"lines" => {}
+                _ => {}
+            },
+            Ok(Event::Empty(e)) if e.name().as_ref() == b"br" => {
+                let t = current_line.trim().to_string();
+                if !t.is_empty() {
+                    lines_buf.push(t);
+                }
+                current_line.clear();
+            }
+            Ok(Event::Text(t)) => {
+                let text = t
+                    .unescape()
+                    .map_err(|e| ContentError::Other(format!("openlyrics text error: {}", e)))?;
+                if in_title {
+                    file_title = text.trim().to_string();
+                } else if in_author {
+                    author = text.trim().to_string();
+                } else if verse_name.is_some() {
+                    if !current_line.is_empty() {
+                        current_line.push(' ');
+                    }
+                    current_line.push_str(text.trim());
+                }
+            }
+            Ok(Event::End(e)) => match e.name().as_ref() {
+                b"title" => in_title = false,
+                b"author" => in_author = false,
+                b"lines" => {
+                    let t = current_line.trim().to_string();
+                    if !t.is_empty() {
+                        lines_buf.push(t);
+                    }
+                    current_line.clear();
+                }
+                b"verse" => {
+                    if let Some(n) = verse_name.take() {
+                        let t = current_line.trim().to_string();
+                        if !t.is_empty() {
+                            lines_buf.push(t);
+                        }
+                        current_line.clear();
+                        if !lines_buf.is_empty() {
+                            sections.push(Section { label: prettify_tag(&n), lines: std::mem::take(&mut lines_buf) });
+                        }
+                    }
+                }
+                _ => {}
+            },
+            Ok(Event::Eof) => break,
+            Err(e) => {
+                return Err(ContentError::Other(format!("openlyrics parse error: {}", e)))
+            }
+            _ => {}
+        }
+    }
+
+    if sections.is_empty() {
+        return Err(ContentError::Other("no verses found in the OpenLyrics file".into()));
+    }
+    let mut meta = serde_json::json!({ "source": "openlyrics" });
+    if !author.is_empty() {
+        meta["authors"] = serde_json::json!([author]);
+    }
+    Ok(ContentItem {
+        id,
+        item_type,
+        title: if file_title.is_empty() { title } else { file_title },
+        language: language.to_string(),
+        license: license.to_string(),
+        visibility: visibility_for_license(license).to_string(),
+        metadata: meta,
+        body: serde_json::json!({ "sections": sections }),
+    })
+}
+
+/// OpenSong — lyrics are plain text with [Tag] section markers inside a
+/// simple XML wrapper.
+pub fn import_opsong(
+    id: String,
+    title: String,
+    item_type: ItemType,
+    xml: &str,
+    language: &str,
+    license: &str,
+) -> Result<ContentItem, ContentError> {
+    let file_title = xml_text_between(xml, "<title>", "</title>");
+    let author = xml_text_between(xml, "<author>", "</author>");
+    let lyrics = xml_text_between(xml, "<lyrics>", "</lyrics>");
+    if lyrics.is_empty() {
+        return Err(ContentError::Other("no <lyrics> block in the OpenSong file".into()));
+    }
+
+    let mut sections: Vec<Section> = Vec::new();
+    let mut current_label = String::new();
+    let mut current_lines: Vec<String> = Vec::new();
+
+    for raw in lyrics.lines() {
+        let t = raw.trim();
+        if t.is_empty() || t == "." {
+            continue; // OpenSong spacer
+        }
+        if t.starts_with('[') && t.ends_with(']') && t.len() > 2 {
+            if !current_lines.is_empty() {
+                sections.push(Section {
+                    label: if current_label.trim().is_empty() {
+                        String::new()
+                    } else {
+                        prettify_tag(current_label.trim())
+                    },
+                    lines: std::mem::take(&mut current_lines),
+                });
+            }
+            current_label = t[1..t.len() - 1].to_string();
+            continue;
+        }
+        current_lines.push(t.to_string());
+    }
+    if !current_lines.is_empty() {
+        sections.push(Section {
+            label: if current_label.trim().is_empty() {
+                String::new()
+            } else {
+                prettify_tag(current_label.trim())
+            },
+            lines: current_lines,
+        });
+    }
+
+    // Label any tag-less stanzas sequentially.
+    let mut counter = 0;
+    for sec in &mut sections {
+        if sec.label.is_empty() {
+            counter += 1;
+            sec.label = format!("Verse {}", counter);
+        }
+    }
+    if sections.is_empty() {
+        return Err(ContentError::Other("no lyric lines in the OpenSong file".into()));
+    }
+
+    let mut meta = serde_json::json!({ "source": "opsong" });
+    if !author.is_empty() {
+        meta["authors"] = serde_json::json!([author]);
+    }
+    Ok(ContentItem {
+        id,
+        item_type,
+        title: if file_title.is_empty() { title } else { file_title },
+        language: language.to_string(),
+        license: license.to_string(),
+        visibility: visibility_for_license(license).to_string(),
+        metadata: meta,
+        body: serde_json::json!({ "sections": sections }),
+    })
+}
+
+/// First occurrence of a raw element's inner text (OpenSong files are
+/// simple enough that tag matching beats a full XML parse).
+fn xml_text_between(xml: &str, open: &str, close: &str) -> String {
+    let start = match xml.find(open) {
+        Some(i) => i + open.len(),
+        None => return String::new(),
+    };
+    match xml[start..].find(close) {
+        Some(end) => xml[start..start + end].trim().to_string(),
+        None => String::new(),
     }
 }
 
@@ -212,3 +487,4 @@ fn local_name(name: &[u8]) -> String {
         None => s.to_string(),
     }
 }
+
