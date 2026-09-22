@@ -338,7 +338,7 @@ fn content_event(slot: u8, state: &SlotState) -> SlotContentEvent {
             } else {
                 &sec.lines[..c.reveal.max(1)]
             };
-            let page = if c.kind == RenderKind::Slide {
+            let page = if c.kind == RenderKind::Slide && c.reveal != usize::MAX {
                 // Slides reveal line by line: show both positions.
                 let line = c.reveal.min(sec.lines.len());
                 format!("{} of {} · line {} of {}", c.index + 1, c.sections.len(), line, sec.lines.len())
@@ -626,8 +626,9 @@ impl DisplayManager {
         if c.sections.is_empty() {
             return false;
         }
-        // Line-by-line reveal for slides (before crossing to another slide).
-        if c.kind == RenderKind::Slide {
+        // Line-by-line reveal for slides (before crossing to another
+        // slide); sets stored with revealLines: false step whole slides.
+        if c.kind == RenderKind::Slide && c.reveal != usize::MAX {
             let len = c.sections[c.index.min(c.sections.len() - 1)].lines.len();
             if delta > 0 && c.reveal < len {
                 c.reveal += 1;
@@ -967,6 +968,34 @@ mod tests {
         assert!(mgr.step(2, 1));
         let ev = content_event(2, &mgr.slots.lock()[1]);
         assert_eq!(ev.page.as_deref(), Some("2 of 2"), "no line counting for scripture");
+    }
+
+    /// A slide set saved with revealLines: false shows all lines at once
+    /// and Next/Prev moves whole slides (no bullet-build).
+    #[test]
+    fn slide_without_reveal_steps_whole_slides() {
+        let mgr = DisplayManager::new();
+        let mut multi = SectionedContent::new(
+            "slide-x".into(),
+            RenderKind::Slide,
+            "Welcome".into(),
+            vec![
+                sec("s1", "Slide 1", "first"),
+                sec("s2", "Slide 2", "second"),
+            ],
+        ); // no revealing_first_line() — all lines visible
+        if let Some(first) = multi.sections.get_mut(0) {
+            first.lines = vec!["line one".into(), "line two".into()];
+        }
+        mgr.set_sections(1, multi);
+
+        let ev = content_event(1, &mgr.slots.lock()[0]);
+        assert_eq!(ev.lines.len(), 2, "all lines visible immediately");
+        assert_eq!(ev.page.as_deref(), Some("1 of 2"), "no line counting");
+
+        assert!(mgr.step(1, 1));
+        let ev = content_event(1, &mgr.slots.lock()[0]);
+        assert_eq!(ev.label, "Slide 2", "Next jumps straight to the next slide");
     }
 
     /// Theme templates: upsert by name, delete, and style validation on

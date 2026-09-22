@@ -776,6 +776,9 @@ function SlideEditorDialog({
         }))
       : [{ label: "", text: "" }],
   );
+  const [reveal, setReveal] = useState(
+    fromExisting ? fromExisting.body.revealLines !== false : true,
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -881,6 +884,16 @@ function SlideEditorDialog({
         >
           ＋ Add slide
         </button>
+
+        <label className="check-row slide-reveal-row">
+          <input
+            type="checkbox"
+            checked={reveal}
+            onChange={(e) => setReveal(e.currentTarget.checked)}
+          />
+          Reveal lines one by one (bullet-build) — untick to always show every
+          line and step whole slides
+        </label>
 
         {error && <div className="error">{error}</div>}
         <div className="form-actions">

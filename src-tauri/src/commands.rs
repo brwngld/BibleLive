@@ -261,13 +261,8 @@ pub async fn show_queue_item(
             return Err("queued section no longer exists".into());
         };
         let title = item_title(store.inner(), &entry.item_id);
-        let is_slide = store
-            .inner()
-            .get_item(&entry.item_id)
-            .ok()
-            .flatten()
-            .map(|i| i.item_type == ItemType::Slide)
-            .unwrap_or(false);
+        let queued = store.inner().get_item(&entry.item_id).ok().flatten();
+        let is_slide = queued.as_ref().map(|i| i.item_type == ItemType::Slide).unwrap_or(false);
         let content = SectionedContent::with_index(
             entry.item_id.clone(),
             if is_slide { RenderKind::Slide } else { RenderKind::Lyrics },
@@ -281,7 +276,11 @@ pub async fn show_queue_item(
             .unwrap_or_default();
         mgr.set_sections(
             slot,
-            if is_slide { content.revealing_first_line() } else { content },
+            if is_slide && slide_reveals(queued.as_ref()) {
+                content.revealing_first_line()
+            } else {
+                content
+            },
         );
         record_item(
             store.inner(),
@@ -891,6 +890,14 @@ fn companion_bible_id(item_id: &str, version: &str) -> Option<String> {
     None
 }
 
+/// Slide sets default to bullet-build (line-by-line reveal); a set saved
+/// with body.revealLines = false shows every line at once and steps
+/// slide-to-slide only.
+fn slide_reveals(item: Option<&ContentItem>) -> bool {
+    item.and_then(|i| i.body.get("revealLines").and_then(serde_json::Value::as_bool))
+        .unwrap_or(true)
+}
+
 /// Resolve and attach the companion scripture for a slot's pairing, from
 /// the primary's item id and the keys it was projected with (verse keys
 /// are identical across translations, so the companion lines up
@@ -1075,7 +1082,11 @@ pub async fn set_slot_section(
     );
     mgr.set_sections(
         input.slot,
-        if is_slide { content.revealing_first_line() } else { content },
+        if is_slide && slide_reveals(item.as_ref()) {
+            content.revealing_first_line()
+        } else {
+            content
+        },
     );
     record_item(
         &store,

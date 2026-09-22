@@ -286,6 +286,10 @@ textarea:focus {
   align-self: flex-start;
   font-size: 0.85em;
 }
+.slide-reveal-row {
+  font-size: 0.85em;
+  color: #94a3b8;
+}
 
 /* Transient status notice (backup done, restore failed…) */
 .notice-bar {
