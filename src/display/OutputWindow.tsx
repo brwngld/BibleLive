@@ -258,11 +258,15 @@ export default function OutputWindow({ slot }: { slot: number }) {
             className="output-text"
             style={{ fontFamily: font, fontSize: `${size}vw`, color: textColor, textShadow: shadowCss }}
           >
-            {view.lines.map((l, i) => (
-              <span key={i}>
-                {l}{" "}
-              </span>
-            ))}
+            {view.kind === "slide"
+              ? // Slides: one editor line = one displayed row (stacked).
+                view.lines.map((l, i) => <div key={i}>{l || "\u00A0"}</div>)
+              : // Scripture reads as flowing prose.
+                view.lines.map((l, i) => (
+                  <span key={i}>
+                    {l}{" "}
+                  </span>
+                ))}
           </div>
           <div
             className="output-label"
