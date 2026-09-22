@@ -73,7 +73,7 @@ pub struct NotifyPayload {
     pub duration_ms: u64,
 }
 
-fn notify_id() -> u64 {
+pub fn notify_id() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -898,6 +898,78 @@ fn slide_reveals(item: Option<&ContentItem>) -> bool {
         .unwrap_or(true)
 }
 
+/// Project a suggestion's content onto a slot — shared by the desktop UI,
+/// Automatic mode and the phone companion.
+pub(crate) async fn project_suggestion(
+    app: &tauri::AppHandle,
+    mgr: &DisplayManager,
+    store: &ContentStore,
+    service: &ServiceState,
+    slot: u8,
+    s: &crate::intelligence::Suggestion,
+) -> Result<(), String> {
+    if s.item_id.starts_with("bible-") {
+        return scripture_to_slot(
+            app,
+            mgr,
+            store,
+            service,
+            slot,
+            s.item_id.clone(),
+            vec![s.section_key.clone()],
+        )
+        .await;
+    }
+    // Song / hymn / slide section.
+    let s2 = store.clone();
+    let item_id = s.item_id.clone();
+    let key = s.section_key.clone();
+    let found = tauri::async_runtime::spawn_blocking(move || s2.get_song_sections(&item_id, &key))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    let Some((index, sections)) = found else {
+        return Err("section not found".into());
+    };
+    let item = store.get_item(&s.item_id).ok().flatten();
+    let title = item
+        .as_ref()
+        .map(|i| i.title.clone())
+        .unwrap_or_else(|| "Lyrics".into());
+    let is_slide = item.as_ref().map(|i| i.item_type) == Some(ItemType::Slide);
+    let render_kind = if is_slide { RenderKind::Slide } else { RenderKind::Lyrics };
+    let content = SectionedContent::with_index(
+        s.item_id.clone(),
+        render_kind,
+        title.clone(),
+        sections,
+        index,
+    );
+    mgr.set_sections(
+        slot,
+        if is_slide && slide_reveals(item.as_ref()) {
+            content.revealing_first_line()
+        } else {
+            content
+        },
+    );
+    record_item(store, service, slot, if is_slide { "slide" } else { "lyrics" }, &title, &s.label);
+    display::emit_slot(app, slot, mgr);
+    Ok(())
+}
+
+/// Push a suggestion card update to the desktop UI (used after a companion
+/// decision so the operator's list stays in sync).
+pub(crate) fn emit_suggestion(app: &tauri::AppHandle, service: &ServiceState, s: crate::intelligence::Suggestion) {
+    let _ = app.emit(
+        "voice-suggestion",
+        SuggestionPayload {
+            suggestion: s,
+            mode: service.mode().as_str().to_string(),
+        },
+    );
+}
+
 /// Resolve and attach the companion scripture for a slot's pairing, from
 /// the primary's item id and the keys it was projected with (verse keys
 /// are identical across translations, so the companion lines up
@@ -981,6 +1053,28 @@ pub async fn set_slot_scripture(
         input.keys,
     )
     .await
+}
+
+// ---- Phone companion -------------------------------------------------------
+
+#[tauri::command]
+pub fn start_companion(
+    app: tauri::AppHandle,
+    handle: State<'_, crate::companion::CompanionHandle>,
+    store: State<'_, ContentStore>,
+) -> Result<crate::companion::CompanionInfo, String> {
+    crate::companion::start(&app, handle.inner(), store.inner())
+}
+
+#[tauri::command]
+pub fn stop_companion(handle: State<'_, crate::companion::CompanionHandle>) -> Result<(), String> {
+    crate::companion::stop(handle.inner());
+    Ok(())
+}
+
+#[tauri::command]
+pub fn companion_status(handle: State<'_, crate::companion::CompanionHandle>) -> bool {
+    handle.is_running()
 }
 
 /// Per-display passage auto-advance: Off or an interval in seconds. The

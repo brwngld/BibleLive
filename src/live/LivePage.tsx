@@ -31,6 +31,9 @@ export default function LivePage() {
   const [slots, setSlots] = useState<SlotView[]>([]);
   const [error, setError] = useState<string | null>(null);
 
+  // phone companion
+  const [companion, setCompanion] = useState<{ running: boolean; url: string | null; pin: string | null } | null>(null);
+
   // lower-third announcement
   const [notifyText, setNotifyText] = useState("");
   const [notifySlot, setNotifySlot] = useState(1);
@@ -76,6 +79,7 @@ export default function LivePage() {
     try {
       await fn();
       refreshQueue();
+    invoke("companion_status").then((r) => setCompanion({ running: r as boolean, url: null, pin: null })).catch(() => {});
     } catch (e) {
       setError(String(e));
     }
@@ -145,6 +149,7 @@ export default function LivePage() {
     voiceApi.autoTarget().then(setAutoTarget).catch(() => {});
     voiceApi.suggestions().then(setSuggestions).catch(() => {});
     refreshQueue();
+    invoke("companion_status").then((r) => setCompanion({ running: r as boolean, url: null, pin: null })).catch(() => {});
     Promise.all([
       lib.listContent({ itemType: "slide" }),
       lib.listContent({ itemType: "hymn" }),
@@ -469,6 +474,59 @@ export default function LivePage() {
           <div className="hotkey-mini muted">
             Ctrl+Alt+1–5 select · Ctrl+Alt+←/→ step · Ctrl+Alt+B blank
           </div>
+        </section>
+
+        {/* Phone companion */}
+        <section className="panel">
+          <h3>📱 Phone remote</h3>
+          {companion?.running ? (
+            <>
+              <p className="muted" style={{ marginTop: 0 }}>
+                On the same Wi-Fi, open:
+              </p>
+              <div className="companion-url">
+                <code>{companion.url ?? "…"}</code>
+                {companion.pin && <span className="pin">PIN {companion.pin}</span>}
+              </div>
+              <p className="muted">
+                The phone can step verses, blank displays, SHOW/IGNORE
+                suggestions and send announcements. The PIN keeps everyone
+                else out.
+              </p>
+              <button
+                className="danger"
+                onClick={() =>
+                  act(async () => {
+                    await invoke("stop_companion");
+                    setCompanion({ running: false, url: null, pin: null });
+                  })
+                }
+              >
+                Stop remote
+              </button>
+            </>
+          ) : (
+            <>
+              <p className="muted">
+                Control the service from your phone — same Wi-Fi, nothing to
+                install. The app shows the address and a PIN to type on the
+                phone.
+              </p>
+              <button
+                className="primary"
+                onClick={() =>
+                  act(async () => {
+                    const info = await invoke<{ running: boolean; url: string | null; pin: string | null }>(
+                      "start_companion",
+                    );
+                    setCompanion(info);
+                  })
+                }
+              >
+                Start remote
+              </button>
+            </>
+          )}
         </section>
 
         {/* Announcements */}

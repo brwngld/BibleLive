@@ -1,4 +1,5 @@
 mod audio;
+pub mod companion;
 
 /// Compact UTC timestamp for the panic log (no chrono dependency).
 fn chrono_like_timestamp() -> String {
@@ -121,6 +122,7 @@ pub fn run() {
         .manage(audio::CaptureManager::new())
         .manage(commands::SttHolder::default())
         .manage(std::sync::Arc::new(commands::AutoShowUndo::default()))
+        .manage(companion::CompanionHandle::default())
         .manage(display::DisplayManager::new())
         .setup(|app| {
             use tauri::Manager;
@@ -290,6 +292,9 @@ pub fn run() {
             commands::set_slot_scripture,
             commands::set_slot_pair,
             commands::set_slot_auto_advance,
+            commands::start_companion,
+            commands::stop_companion,
+            commands::companion_status,
             commands::set_slot_section,
             commands::set_slot_media,
             commands::slot_step,

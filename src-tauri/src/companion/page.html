@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>BibleLive Remote</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; background: #0b1220; color: #e2e8f0;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 12px; padding-bottom: 90px;
+  }
+  h1 { font-size: 1.05em; margin: 4px 0 2px; }
+  .sub { color: #64748b; font-size: 0.8em; margin-bottom: 12px; }
+  .card {
+    background: #0f172a; border: 1px solid #1e293b; border-radius: 12px;
+    padding: 10px; margin-bottom: 12px;
+  }
+  .card h2 { font-size: 0.8em; color: #94a3b8; margin: 0 0 8px; text-transform: uppercase; letter-spacing: 0.06em; }
+  .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+  button {
+    background: #1e293b; color: #e2e8f0; border: 1px solid #334155;
+    border-radius: 8px; padding: 8px 6px; font-size: 0.95em;
+  }
+  button:active { background: #334155; }
+  button.primary { background: #1d4ed8; border-color: #1d4ed8; }
+  button.danger { background: #7f1d1d; border-color: #991b1b; }
+  .slot { display: flex; flex-direction: column; gap: 4px; padding: 8px 6px; }
+  .slot .num { font-weight: 700; }
+  .slot .lbl { font-size: 0.62em; color: #94a3b8; min-height: 2.2em; overflow: hidden; }
+  .slot.blank { opacity: 0.45; }
+  .slot.active { border-color: #3b82f6; background: rgba(59,130,246,0.15); }
+  .slot .row { display: flex; gap: 4px; }
+  .slot .row button { flex: 1; padding: 5px 2px; font-size: 0.8em; }
+  .sug { border-bottom: 1px solid #1e293b; padding: 8px 2px; }
+  .sug:last-child { border-bottom: none; }
+  .sug .head { display: flex; justify-content: space-between; gap: 8px; font-weight: 600; font-size: 0.92em; }
+  .sug .conf { color: #64748b; font-weight: 400; }
+  .sug .prev { color: #94a3b8; font-size: 0.82em; margin: 3px 0 6px; }
+  .sug .acts { display: flex; gap: 6px; }
+  .sug .acts button { flex: 1; }
+  input, select {
+    background: #1e293b; border: 1px solid #334155; color: #e2e8f0;
+    border-radius: 8px; padding: 9px; font-size: 0.95em; width: 100%;
+  }
+  .rowline { display: flex; gap: 6px; margin-top: 6px; }
+  .status { position: fixed; left: 0; right: 0; bottom: 0; background: #0f172a;
+    border-top: 1px solid #1e293b; padding: 8px 12px; display: flex;
+    justify-content: space-between; align-items: center; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+  .dot.on { background: #22c55e; } .dot.off { background: #64748b; }
+  .empty { color: #475569; font-size: 0.85em; }
+  .toast { position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
+    background: #1d4ed8; color: #fff; padding: 7px 14px; border-radius: 18px;
+    font-size: 0.85em; opacity: 0; transition: opacity 0.25s; pointer-events: none; z-index: 5; }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+  <h1>BibleLive Remote</h1>
+  <div class="sub" id="pinNote">Connected to the church PC over Wi-Fi</div>
+
+  <div class="card">
+    <h2>Displays</h2>
+    <div class="grid" id="slots"></div>
+    <div class="rowline">
+      <button class="danger" style="flex:1" onclick="cmd('blankAll', {value:true})">⬛ Blank all</button>
+      <button style="flex:1" onclick="cmd('blankAll', {value:false})">Restore all</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Suggestions</h2>
+    <div id="sugs"><div class="empty">Nothing detected yet.</div></div>
+  </div>
+
+  <div class="card">
+    <h2>Announcement</h2>
+    <input id="annText" placeholder="e.g., Lunch in the hall after service">
+    <div class="rowline">
+      <select id="annSlot" style="flex:0 0 80px">
+        <option value="1">D1</option><option value="2">D2</option><option value="3">D3</option>
+        <option value="4">D4</option><option value="5">D5</option>
+      </select>
+      <select id="annDur" style="flex:0 0 100px">
+        <option value="10000">10 s</option>
+        <option value="30000" selected>30 s</option>
+        <option value="60000">1 min</option>
+        <option value="0">Until hidden</option>
+      </select>
+      <button class="primary" style="flex:1" onclick="announce()">Show</button>
+      <button onclick="cmd('notify', {slot:+document.getElementById('annSlot').value, text:'', durationMs:0}); toast('Hidden')">Hide</button>
+    </div>
+  </div>
+
+  <div class="status">
+    <span><span class="dot off" id="dot"></span><span id="stateTxt">connecting…</span></span>
+    <span class="sub" style="margin:0" id="activeTxt"></span>
+  </div>
+  <div class="toast" id="toast"></div>
+
+<script>
+const qs = new URLSearchParams(location.search);
+let PIN = qs.get('pin') || localStorage.getItem('bl-pin') || '';
+if (qs.get('pin')) localStorage.setItem('bl-pin', PIN);
+let active = 1;
+
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 1600);
+}
+
+async function cmd(action, params = {}) {
+  try {
+    const res = await fetch(`/cmd?pin=${encodeURIComponent(PIN)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, ...params }),
+    });
+    const data = await res.json();
+    if (!data.ok) toast(data.error || 'failed');
+    refresh();
+  } catch { markOffline(); }
+}
+
+function announce() {
+  const text = document.getElementById('annText').value.trim();
+  if (!text) { toast('Type an announcement first'); return; }
+  cmd('notify', {
+    slot: +document.getElementById('annSlot').value,
+    text,
+    durationMs: +document.getElementById('annDur').value,
+  });
+  toast('Announcement shown');
+}
+
+function esc(s) {
+  return (s || '').replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+
+let slots = [], suggestions = [];
+async function refresh() {
+  let data;
+  try {
+    const res = await fetch(`/state?pin=${encodeURIComponent(PIN)}`);
+    if (res.status === 403) { document.body.innerHTML = '<h1>Wrong PIN</h1><p class="sub">Open the link shown in BibleLive (it includes the PIN).</p>'; return; }
+    data = await res.json();
+    markOnline();
+  } catch { markOffline(); return; }
+  if (!data.ok) return;
+  slots = data.slots; suggestions = data.suggestions; render();
+}
+
+function markOnline() {
+  document.getElementById('dot').className = 'dot on';
+  document.getElementById('stateTxt').textContent = 'live';
+}
+function markOffline() {
+  document.getElementById('dot').className = 'dot off';
+  document.getElementById('stateTxt').textContent = 'offline — retrying';
+}
+
+function render() {
+  const g = document.getElementById('slots');
+  g.innerHTML = '';
+  slots.forEach((s) => {
+    const blank = s.blank || s.content.kind === 'blank';
+    const label = blank ? 'blank' : (s.content.label || s.content.title || s.content.kind);
+    const d = document.createElement('button');
+    d.className = 'slot' + (blank ? ' blank' : '') + (s.active ? ' active' : '');
+    d.onclick = () => cmd('setActive', { slot: s.slot });
+    d.innerHTML = `<span class="num">${s.slot}${s.active ? ' ★' : ''}</span>` +
+      `<span class="lbl">${esc(label)}</span>` +
+      `<span class="row"><button onclick="event.stopPropagation();cmd('step',{slot:${s.slot},delta:-1})">◀</button>` +
+      `<button onclick="event.stopPropagation();cmd('step',{slot:${s.slot},delta:1})">▶</button>` +
+      `<button onclick="event.stopPropagation();cmd('blank',{slot:${s.slot},value:${!blank}})">${blank ? '◻' : '⬛'}</button></span>`;
+    g.appendChild(d);
+  });
+  const act = slots.find((s) => s.active);
+  document.getElementById('activeTxt').textContent = act ? `★ Display ${act.slot}` : '';
+
+  const box = document.getElementById('sugs');
+  if (!suggestions.length) {
+    box.innerHTML = '<div class="empty">Nothing detected yet.</div>';
+  } else {
+    box.innerHTML = '';
+    suggestions.slice(0, 6).forEach((sg) => {
+      const div = document.createElement('div');
+      div.className = 'sug';
+      div.innerHTML = `<div class="head"><span>${esc(sg.label)}</span>` +
+        `<span class="conf">${Math.round(sg.confidence * 100)}%</span></div>` +
+        (sg.preview ? `<div class="prev">“${esc(sg.preview)}”</div>` : '') +
+        `<div class="acts"><button class="primary" onclick="cmd('respond',{id:'${sg.id}',value:true})">SHOW</button>` +
+        `<button onclick="cmd('respond',{id:'${sg.id}',value:false})">IGNORE</button></div>`;
+      box.appendChild(div);
+    });
+  }
+}
+
+refresh();
+setInterval(refresh, 1500);
+</script>
+</body>
+</html>

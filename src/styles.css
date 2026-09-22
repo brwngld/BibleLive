@@ -309,6 +309,30 @@ textarea:focus {
   max-width: 70vw;
 }
 
+/* ---- Phone companion ---- */
+.companion-url {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.companion-url code {
+  background: #0b1220;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 0.95em;
+}
+.companion-url .pin {
+  background: #1d4ed8;
+  color: #fff;
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
 /* ---- Service queue (Live page) ---- */
 
 .queue-add {
