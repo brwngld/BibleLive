@@ -32,7 +32,13 @@ export default function LivePage() {
   const [error, setError] = useState<string | null>(null);
 
   // phone companion
-  const [companion, setCompanion] = useState<{ running: boolean; url: string | null; pin: string | null } | null>(null);
+  const [companion, setCompanion] = useState<{
+    running: boolean;
+    url: string | null;
+    pin: string | null;
+    qrSvg: string | null;
+    firewallOk: boolean;
+  } | null>(null);
 
   // lower-third announcement
   const [notifyText, setNotifyText] = useState("");
@@ -79,7 +85,13 @@ export default function LivePage() {
     try {
       await fn();
       refreshQueue();
-    invoke<{ running: boolean; url: string | null; pin: string | null }>("companion_status")
+    invoke<{
+      running: boolean;
+      url: string | null;
+      pin: string | null;
+      qrSvg: string | null;
+      firewallOk: boolean;
+    }>("companion_status")
       .then(setCompanion)
       .catch(() => {});
     } catch (e) {
@@ -151,7 +163,13 @@ export default function LivePage() {
     voiceApi.autoTarget().then(setAutoTarget).catch(() => {});
     voiceApi.suggestions().then(setSuggestions).catch(() => {});
     refreshQueue();
-    invoke<{ running: boolean; url: string | null; pin: string | null }>("companion_status")
+    invoke<{
+      running: boolean;
+      url: string | null;
+      pin: string | null;
+      qrSvg: string | null;
+      firewallOk: boolean;
+    }>("companion_status")
       .then(setCompanion)
       .catch(() => {});
     Promise.all([
@@ -485,13 +503,30 @@ export default function LivePage() {
           <h3>📱 Phone remote</h3>
           {companion?.running ? (
             <>
-              <p className="muted" style={{ marginTop: 0 }}>
-                On the same Wi-Fi, open:
-              </p>
-              <div className="companion-url">
-                <code>{companion.url ?? "…"}</code>
-                {companion.pin && <span className="pin">PIN {companion.pin}</span>}
+              <div className="companion-connect">
+                {companion.qrSvg && (
+                  <div
+                    className="companion-qr"
+                    title="Scan with the phone to open the remote"
+                    dangerouslySetInnerHTML={{ __html: companion.qrSvg }}
+                  />
+                )}
+                <div className="companion-link">
+                  <p className="muted" style={{ marginTop: 0 }}>
+                    On the same Wi-Fi, scan this code — or open this exact
+                    address (PIN included):
+                  </p>
+                  <code>{companion.url ?? "…"}</code>
+                </div>
               </div>
+              {!companion.firewallOk && (
+                <div className="warning">
+                  ⚠ Windows Firewall could not be configured (permission was
+                  declined or needs an admin). The phone likely can’t
+                  connect until BibleLive is allowed through the firewall —
+                  press Start remote again and accept the Windows prompt.
+                </div>
+              )}
               <p className="muted">
                 The phone can step verses, blank displays, SHOW/IGNORE
                 suggestions and send announcements. The PIN keeps everyone
@@ -502,7 +537,13 @@ export default function LivePage() {
                 onClick={() =>
                   act(async () => {
                     await invoke("stop_companion");
-                    setCompanion({ running: false, url: null, pin: null });
+                    setCompanion({
+                      running: false,
+                      url: null,
+                      pin: null,
+                      qrSvg: null,
+                      firewallOk: true,
+                    });
                   })
                 }
               >
@@ -520,9 +561,13 @@ export default function LivePage() {
                 className="primary"
                 onClick={() =>
                   act(async () => {
-                    const info = await invoke<{ running: boolean; url: string | null; pin: string | null }>(
-                      "start_companion",
-                    );
+                    const info = await invoke<{
+                      running: boolean;
+                      url: string | null;
+                      pin: string | null;
+                      qrSvg: string | null;
+                      firewallOk: boolean;
+                    }>("start_companion");
                     setCompanion(info);
                   })
                 }

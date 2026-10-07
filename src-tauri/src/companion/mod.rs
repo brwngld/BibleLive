@@ -40,7 +40,13 @@ impl CompanionHandle {
         let info = self.info.lock().clone();
         match (self.is_running(), info) {
             (true, Some(i)) => i,
-            _ => CompanionInfo { running: false, url: None, pin: None },
+            _ => CompanionInfo {
+                running: false,
+                url: None,
+                pin: None,
+                qr_svg: None,
+                firewall_ok: true,
+            },
         }
     }
 }
@@ -49,8 +55,14 @@ impl CompanionHandle {
 #[serde(rename_all = "camelCase")]
 pub struct CompanionInfo {
     pub running: bool,
+    /// The FULL link including ?pin= — one thing to open, nothing to type.
     pub url: Option<String>,
     pub pin: Option<String>,
+    /// QR code (SVG) of the full link, shown next to it for scanning.
+    pub qr_svg: Option<String>,
+    /// False when the Windows Firewall rule could not be confirmed — the
+    /// phone then cannot reach the server even on the same Wi-Fi.
+    pub firewall_ok: bool,
 }
 
 /// Best-effort LAN IP: ask the OS which local interface would route to the
@@ -101,7 +113,8 @@ pub fn start(app: &AppHandle, handle: &CompanionHandle, store: &ContentStore) ->
         return Err("no free port in 8787-8792 for the companion server".into());
     };
     let ip = lan_ip().unwrap_or_else(|| "127.0.0.1".into());
-    let url = format!("http://{ip}:{port}/");
+    let full_url = format!("http://{ip}:{port}/?pin={pin}");
+    let firewall_ok = ensure_firewall_rule();
 
     let app_thread = app.clone();
     let stop_thread = stop.clone();
@@ -111,7 +124,13 @@ pub fn start(app: &AppHandle, handle: &CompanionHandle, store: &ContentStore) ->
     });
 
     *handle.stop.lock() = Some(stop);
-    let info = CompanionInfo { running: true, url: Some(url), pin: Some(pin) };
+    let info = CompanionInfo {
+        running: true,
+        url: Some(full_url.clone()),
+        pin: Some(pin),
+        qr_svg: Some(qr_svg(&full_url)),
+        firewall_ok,
+    };
     *handle.info.lock() = Some(info.clone());
     Ok(info)
 }
@@ -128,6 +147,69 @@ fn authorized(url: &str, pin: &str) -> bool {
         .nth(1)
         .map(|q| q.split('&').any(|kv| kv == format!("pin={pin}")))
         .unwrap_or(false)
+}
+
+/// Minimal SVG QR code of the connection link (scannable from the phone).
+fn qr_svg(text: &str) -> String {
+    let Ok(code) = qrcodegen::QrCode::encode_text(text, qrcodegen::QrCodeEcc::Medium) else {
+        return String::new();
+    };
+    let n = code.size(); // i32
+    let border: i32 = 2;
+    let dim = n + border * 2;
+    let mut path = String::new();
+    for y in 0..n {
+        for x in 0..n {
+            if code.get_module(x, y) {
+                let (px, py) = (x + border, y + border);
+                path.push_str(&format!("M{px},{py}h1v1h-1z"));
+            }
+        }
+    }
+    let head = format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {dim} {dim}" shape-rendering="crispEdges"><rect width="{dim}" height="{dim}" fill="#ffffff"/>"##
+    );
+    let tail = format!(r##"<path d="{path}" fill="#000000"/></svg>"##);
+    head + &tail
+}
+
+/// Best effort: make sure Windows Firewall allows inbound connections to
+/// the app. Returns true when a rule exists (or was just added). Adding a
+/// rule needs one UAC confirmation — declined or failed, we say so.
+fn ensure_firewall_rule() -> bool {
+    const RULE: &str = "BibleLive Companion";
+    let exe = match std::env::current_exe() {
+        Ok(e) => e,
+        Err(_) => return false,
+    };
+    let rule_exists = |output: &std::process::Output| {
+        String::from_utf8_lossy(&output.stdout)
+            .to_lowercase()
+            .contains(&RULE.to_lowercase())
+    };
+    let query = || {
+        std::process::Command::new("netsh")
+            .args(["advfirewall", "firewall", "show", "rule", &format!("name={RULE}")])
+            .output()
+    };
+    match query() {
+        Ok(out) if rule_exists(&out) => return true,
+        _ => {}
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let script = format!(
+            "Start-Process netsh -ArgumentList 'advfirewall firewall add rule name=\"{RULE}\" dir=in action=allow program=\"{}\" enable=yes profile=any' -Verb RunAs -Wait",
+            exe.display()
+        );
+        let _ = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &script])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+    }
+    matches!(query(), Ok(out) if rule_exists(&out))
 }
 
 fn serve(server: tiny_http::Server, app: AppHandle, stop: Arc<AtomicBool>, pin: String) {
@@ -162,6 +244,27 @@ fn handle_request(mut request: tiny_http::Request, app: &AppHandle, pin: &str) {
                 ),
         );
         return;
+    }
+
+    // "/3533" (the PIN typed as a path — an easy mistake) redirects to the
+    // real link.
+    if method == tiny_http::Method::Get {
+        let digits = path.trim_start_matches('/');
+        if digits.len() == 4 && digits.chars().all(|c| c.is_ascii_digit()) {
+            let _ = request.respond(
+                tiny_http::Response::empty(302).with_header(
+                    {
+                        let loc: Vec<u8> = b"/?pin="
+                            .iter()
+                            .copied()
+                            .chain(digits.as_bytes().iter().copied())
+                            .collect();
+                        tiny_http::Header::from_bytes(&b"Location"[..], &loc[..]).unwrap()
+                    }
+                ),
+            );
+            return;
+        }
     }
 
     match (&method, path.as_str()) {

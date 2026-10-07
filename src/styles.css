@@ -310,27 +310,35 @@ textarea:focus {
 }
 
 /* ---- Phone companion ---- */
-.companion-url {
+.companion-connect {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-bottom: 8px;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 10px;
 }
-.companion-url code {
+.companion-qr {
+  flex: 0 0 116px;
+  background: #fff;
+  border-radius: 8px;
+  padding: 6px;
+}
+.companion-qr svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.companion-link {
+  flex: 1;
+  min-width: 0;
+}
+.companion-link code {
+  display: block;
   background: #0b1220;
   border: 1px solid #334155;
   border-radius: 8px;
   padding: 7px 10px;
-  font-size: 0.95em;
-}
-.companion-url .pin {
-  background: #1d4ed8;
-  color: #fff;
-  border-radius: 8px;
-  padding: 7px 10px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
+  font-size: 0.9em;
+  word-break: break-all;
 }
 
 /* ---- Service queue (Live page) ---- */
