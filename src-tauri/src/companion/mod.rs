@@ -22,19 +22,30 @@ use tauri::{AppHandle, Emitter, Manager};
 const TICK: Duration = Duration::from_millis(80);
 const PORTS: [u16; 6] = [8787, 8788, 8789, 8790, 8791, 8792];
 
-/// Managed handle: which server (if any) is running and how to stop it.
+/// Managed handle: which server (if any) is running, how to stop it, and
+/// the address/PIN to show the operator (survives page/tab changes).
 #[derive(Default)]
 pub struct CompanionHandle {
     stop: parking_lot::Mutex<Option<Arc<AtomicBool>>>,
+    info: parking_lot::Mutex<Option<CompanionInfo>>,
 }
 
 impl CompanionHandle {
     pub fn is_running(&self) -> bool {
         self.stop.lock().is_some()
     }
+
+    /// Full status for the UI: running flag + url/pin while running.
+    pub fn status(&self) -> CompanionInfo {
+        let info = self.info.lock().clone();
+        match (self.is_running(), info) {
+            (true, Some(i)) => i,
+            _ => CompanionInfo { running: false, url: None, pin: None },
+        }
+    }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct CompanionInfo {
     pub running: bool,
@@ -100,13 +111,16 @@ pub fn start(app: &AppHandle, handle: &CompanionHandle, store: &ContentStore) ->
     });
 
     *handle.stop.lock() = Some(stop);
-    Ok(CompanionInfo { running: true, url: Some(url), pin: Some(pin) })
+    let info = CompanionInfo { running: true, url: Some(url), pin: Some(pin) };
+    *handle.info.lock() = Some(info.clone());
+    Ok(info)
 }
 
 pub fn stop(handle: &CompanionHandle) {
     if let Some(flag) = handle.stop.lock().take() {
         flag.store(true, Ordering::Relaxed);
     }
+    *handle.info.lock() = None;
 }
 
 fn authorized(url: &str, pin: &str) -> bool {

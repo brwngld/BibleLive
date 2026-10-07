@@ -79,7 +79,9 @@ export default function LivePage() {
     try {
       await fn();
       refreshQueue();
-    invoke("companion_status").then((r) => setCompanion({ running: r as boolean, url: null, pin: null })).catch(() => {});
+    invoke<{ running: boolean; url: string | null; pin: string | null }>("companion_status")
+      .then(setCompanion)
+      .catch(() => {});
     } catch (e) {
       setError(String(e));
     }
@@ -149,7 +151,9 @@ export default function LivePage() {
     voiceApi.autoTarget().then(setAutoTarget).catch(() => {});
     voiceApi.suggestions().then(setSuggestions).catch(() => {});
     refreshQueue();
-    invoke("companion_status").then((r) => setCompanion({ running: r as boolean, url: null, pin: null })).catch(() => {});
+    invoke<{ running: boolean; url: string | null; pin: string | null }>("companion_status")
+      .then(setCompanion)
+      .catch(() => {});
     Promise.all([
       lib.listContent({ itemType: "slide" }),
       lib.listContent({ itemType: "hymn" }),

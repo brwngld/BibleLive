@@ -1073,8 +1073,10 @@ pub fn stop_companion(handle: State<'_, crate::companion::CompanionHandle>) -> R
 }
 
 #[tauri::command]
-pub fn companion_status(handle: State<'_, crate::companion::CompanionHandle>) -> bool {
-    handle.is_running()
+pub fn companion_status(
+    handle: State<'_, crate::companion::CompanionHandle>,
+) -> crate::companion::CompanionInfo {
+    handle.status()
 }
 
 /// Per-display passage auto-advance: Off or an interval in seconds. The
